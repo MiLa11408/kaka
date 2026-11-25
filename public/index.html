@@ -40,6 +40,12 @@
   .dot{width:5px;height:5px;border-radius:50%;background:var(--teal);display:inline-block;
     box-shadow:0 0 8px var(--teal);animation:breath 4s ease-in-out infinite}
   .dot.warn{background:var(--amber);box-shadow:0 0 8px var(--amber)}
+  .streak-chip{display:flex;align-items:baseline;gap:8px;justify-content:flex-end;margin-bottom:7px}
+  .streak-chip b{font-size:16px;color:var(--amber);font-weight:400;letter-spacing:.08em}
+  .streak-chip span{font-size:10px;letter-spacing:.22em;color:var(--dim);text-transform:uppercase}
+  .pbtn{font-size:9px;letter-spacing:.2em;text-transform:uppercase;color:var(--dim);
+    background:none;border:0;cursor:pointer;font-family:var(--mono);padding:4px 0}
+  .pbtn:hover{color:var(--ink)}
   @keyframes breath{0%,100%{opacity:.35}50%{opacity:1}}
 
   /* ---------- 底部操作 ---------- */
@@ -130,6 +136,22 @@
   .kv{display:flex;justify-content:space-between;font-size:10px;color:var(--dim);letter-spacing:.12em}
   .kv b{color:var(--ink);font-weight:400}
 
+  .checkin{position:fixed;inset:0;z-index:45;display:flex;align-items:center;justify-content:center;
+    pointer-events:none;opacity:0;transition:opacity .5s ease}
+  .checkin.on{opacity:1}
+  .ci-inner{text-align:center;position:relative;padding:44px 70px;
+    transform:translateY(6px);transition:transform .7s cubic-bezier(.2,.8,.2,1)}
+  .ci-inner::before{content:'';position:absolute;inset:-30px;z-index:-1;border-radius:50%;
+    background:radial-gradient(closest-side,rgba(4,6,9,.78),rgba(4,6,9,.45) 55%,rgba(4,6,9,0))}
+  .checkin.on .ci-inner{transform:none}
+  .ci-label{font-size:9.5px;letter-spacing:.5em;color:var(--amber);text-transform:uppercase;
+    margin-bottom:10px;text-indent:.5em}
+  .ci-num{display:flex;align-items:baseline;justify-content:center;gap:6px}
+  .ci-num b{font-size:64px;line-height:1;color:var(--ink);font-weight:300;letter-spacing:.02em;
+    text-shadow:0 0 40px rgba(232,163,74,.35)}
+  .ci-num i{font-style:normal;font-size:13px;color:#b9c3cc;letter-spacing:.2em}
+  .ci-sub{margin-top:12px;font-size:10px;letter-spacing:.26em;color:#8e99a4;text-transform:uppercase}
+
   .toast{position:fixed;z-index:60;bottom:96px;left:50%;transform:translateX(-50%) translateY(10px);
     background:rgba(8,11,15,.95);border:1px solid var(--line);padding:10px 18px;font-size:11px;
     letter-spacing:.14em;color:var(--ink);opacity:0;transition:.35s;pointer-events:none;white-space:nowrap}
@@ -149,13 +171,31 @@
   }
 
   @media(max-width:640px){
-    .hud.tl{top:16px;left:16px}.hud.tr{top:16px;right:16px}
+    .hud{font-size:11px;letter-spacing:.14em}
+    .hud.tl{top:calc(16px + env(safe-area-inset-top));left:20px}
+    .hud.tr{top:calc(16px + env(safe-area-inset-top));right:20px}
+    .hud .row{margin:5px 0;gap:8px}
     .hud.bl{display:none}
-    .dock{bottom:18px;width:calc(100% - 24px);justify-content:space-between}
-    .btn{padding:12px 6px;flex:1;font-size:9px;letter-spacing:.12em}
+    .title{font-size:14px;letter-spacing:.34em;margin-bottom:10px}
+    .m-hide{display:none!important}
+    .wnote{display:none}
+
+    /* 连续天数：手机上的主角 */
+    .streak-chip{flex-direction:column;align-items:flex-end;gap:1px;margin-bottom:10px}
+    .streak-chip b{font-size:24px;letter-spacing:0}
+    .streak-chip span{font-size:8px;letter-spacing:.26em}
+
+    /* 底部操作：四个主操作，高度够按 */
+    .dock{bottom:calc(14px + env(safe-area-inset-bottom));width:calc(100% - 20px);gap:0}
+    .btn{flex:1;height:54px;padding:0;font-size:12px;letter-spacing:.16em;
+      display:flex;align-items:center;justify-content:center}
     .btn .k{display:none}
-    .title{font-size:13px}
     .hint{display:none}
+  }
+
+  @media(max-width:400px){
+    .btn{font-size:11px;letter-spacing:.1em}
+    .hud{font-size:10px}
   }
 </style>
 </head>
@@ -168,16 +208,16 @@
 <div class="hud tl">
   <div class="title">余烬 <em>/</em> EMBER</div>
   <div class="row"><span class="dot" id="live"></span><b id="clock">--:--</b><span class="sep"></span><span id="day">第 -- 天</span></div>
-  <div class="row"><span id="weather">—</span></div>
+  <div class="row"><span id="weather">—</span><span class="wnote" id="wnote"></span></div>
   <div class="row"><span id="temp">—</span><span class="sep"></span><span id="hum">—</span></div>
 </div>
 
 <div class="hud tr">
-  <div class="row" style="justify-content:flex-end"><span>连续</span><b id="s-streak">—</b></div>
-  <div class="row" style="justify-content:flex-end"><span>观测者</span><b id="s-visitors">0</b></div>
+  <div class="streak-chip"><b id="s-streak">—</b><span>连续</span></div>
   <div class="row" style="justify-content:flex-end"><span>生长</span><b id="s-plants">0</b></div>
   <div class="row" style="justify-content:flex-end"><span>星</span><b id="s-words">0</b></div>
-  <div class="row" style="justify-content:flex-end"><span>在线</span><b id="s-online">1</b></div>
+  <div class="row m-hide" style="justify-content:flex-end"><span>观测者</span><b id="s-visitors">0</b></div>
+  <div class="row m-hide" style="justify-content:flex-end"><span>在线</span><b id="s-online">1</b></div>
 </div>
 
 <div class="hud bl">
@@ -192,14 +232,18 @@
   <button class="btn" id="b-plant" title="播种（P）">播种<span class="k">P</span></button>
   <button class="btn" id="b-word" title="留一句话（W）">留言<span class="k">W</span></button>
   <button class="btn" id="b-diary" title="观测日志（D）">日记<span class="k">D</span></button>
-  <button class="btn" id="b-save" title="存一张图（S）">存档<span class="k">S</span></button>
-  <button class="btn" id="b-audio" title="环境音">声音</button>
+  <button class="btn m-hide" id="b-save" title="存一张图（S）">存档<span class="k">S</span></button>
+  <button class="btn m-hide" id="b-audio" title="环境音">声音</button>
 </div>
 
 <aside class="panel" id="panel">
   <div class="panel-h">
     <h2>观测日志</h2>
-    <button class="x" id="panel-x">✕</button>
+    <div style="display:flex;gap:14px;align-items:center">
+      <button class="x pbtn" id="panel-save" title="存一张图">存档</button>
+      <button class="x pbtn" id="panel-audio" title="环境音">声音</button>
+      <button class="x" id="panel-x">✕</button>
+    </div>
   </div>
   <div class="panel-b" id="panel-b"></div>
 </aside>
@@ -220,6 +264,14 @@
 </div>
 
 <div class="toast" id="toast"></div>
+
+<div class="checkin" id="checkin">
+  <div class="ci-inner">
+    <div class="ci-label">已签到</div>
+    <div class="ci-num"><b id="ci-n">1</b><i>天</i></div>
+    <div class="ci-sub" id="ci-sub">连续第 1 天</div>
+  </div>
+</div>
 <div id="offline" style="position:fixed;z-index:35;top:calc(14px + env(safe-area-inset-top));left:50%;
   transform:translateX(-50%) translateY(-40px);opacity:0;transition:.4s;background:rgba(180,84,74,.14);
   border:1px solid rgba(180,84,74,.4);color:#d99a92;font-size:9.5px;letter-spacing:.22em;
@@ -281,7 +333,7 @@ function rng(seed){ let s = seed * 9301 + 49297; return () => { s = (s * 9301 + 
 const SKY = {
   night: [[7,9,15],[11,15,25],[19,25,37]],
   dawn:  [[24,22,34],[82,60,60],[164,110,76]],
-  day:   [[94,108,118],[126,136,140],[166,172,170]],
+  day:   [[104,104,96],[150,146,132],[190,182,164]],
   dusk:  [[28,24,34],[92,58,54],[176,104,62]],
 };
 function phaseColors(light, phase){
@@ -303,7 +355,8 @@ function buildStars(){
 buildStars();
 window.addEventListener('resize', buildStars);
 
-function groundY(){ return H * 0.72; }
+function isPortrait(){ return H > W * 1.05; }
+function groundY(){ return H * (isPortrait() ? 0.63 : 0.72); }
 
 function draw(time, dt){
   const light = lightSmooth;
@@ -665,8 +718,8 @@ function drawPlant(p, time, light){
   const gy = groundY();
   const x = p.x * W;
   const depth = p.depth || 0;
-  const baseY = gy - 8 + depth * 108;
-  const k = (0.5 + depth * 0.85) * (H / 720);
+  const baseY = gy - 8 + depth * (H * 0.17);
+  const k = (0.5 + depth * 0.85) * (H / 720) * (isPortrait() ? 1.18 : 1);
   const g = clamp(p.growth);
   const health = p.alive ? clamp(p.health) : 0;
   const wind = clamp((S.weather.wind || 0) / 100, 0, 1);
@@ -675,8 +728,8 @@ function drawPlant(p, time, light){
   const h = (28 + 250 * Math.pow(g, 0.8)) * k * hMul;
   const alpha = p.alive ? 0.72 + health * 0.28 : 0.32;
   const hue = p.species === 'crystal' ? 172 : p.species === 'lantern' ? 42 : 130;
-  const sat = p.alive ? 9 + health * 13 : 4;
-  const lum = (p.alive ? 11 : 7) + health * 5 + light * 7;
+  const sat = p.alive ? 8 + health * 10 : 3;
+  const lum = (p.alive ? 10 : 6) + health * 4 + light * 6;
 
   ctx.save();
   ctx.translate(x, baseY);
@@ -688,7 +741,7 @@ function drawPlant(p, time, light){
   ctx.fill();
 
   const body = `hsla(${hue},${sat}%,${lum}%,${alpha})`;
-  const edge = `hsla(${hue + 16},${sat + 24}%,${lum + 19}%,${alpha * 0.42})`;
+  const edge = `hsla(${hue + 16},${sat + 18}%,${lum + 13}%,${alpha * (0.3 + (1 - light) * 0.22)})`;
 
   const paint = (build) => {
     ctx.fillStyle = body;
@@ -1111,7 +1164,8 @@ function renderHUD(){
   $('clock').textContent = hh + ':' + mm;
   $('day').textContent = '第 ' + S.day + ' 天';
   const wn = { clear:'晴', rain:'雨', fog:'雾', aurora:'极光', still:'静' }[S.weather.kind] || S.weather.kind;
-  $('weather').textContent = wn + ' · ' + S.weather.note;
+  $('weather').textContent = wn;
+  $('wnote').textContent = S.weather.note ? '· ' + S.weather.note : '';
   $('temp').textContent = S.weather.temp + '°C';
   $('hum').textContent = '湿度 ' + S.weather.humidity + '%';
   $('s-visitors').textContent = S.stats.visitors;
@@ -1144,6 +1198,12 @@ function setOffline(on){
   el.style.opacity = on ? '1' : '0';
   el.style.transform = 'translateX(-50%) translateY(' + (on ? '0' : '-40px') + ')';
 }
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState !== 'visible') return;
+  fetchState();
+  if (!es || es.readyState === 2) connect();
+});
+
 window.addEventListener('offline', () => setOffline(true));
 window.addEventListener('online', () => { setOffline(false); fetchState(); });
 
@@ -1172,6 +1232,11 @@ async function act(payload){
   } catch(e){ toast('连接不上'); return null; }
 }
 
+document.addEventListener('pointerdown', () => {
+  const el = $('checkin');
+  if (el.classList.contains('on')) el.classList.remove('on');
+}, { passive: true });
+
 cv.addEventListener('click', (e) => {
   const mx = e.clientX, my = e.clientY;
   let best = null, bestD = 1e9;
@@ -1189,7 +1254,7 @@ cv.addEventListener('click', (e) => {
     return;
   }
   // 空白处：点灯
-  if (my > groundY() - 120){
+  if (my > groundY() - 140){
     const x = clamp(mx / W, 0.03, 0.97);
     act({ type:'light', x });
     toast('点了一盏灯');
@@ -1288,6 +1353,8 @@ $('b-diary').addEventListener('click', () => {
   if (p.classList.contains('open')) loadDiary();
 });
 $('panel-x').addEventListener('click', () => $('panel').classList.remove('open'));
+$('panel-save').addEventListener('click', savePostcard);
+$('panel-audio').addEventListener('click', () => $('b-audio').click());
 
 async function loadDiary(){
   const box = $('panel-b');
@@ -1478,13 +1545,24 @@ async function enter(){
     YOU = j.state.you || null;
     renderHUD();
     showRecap(j.recap);
-    if (j.recap && j.recap.checkinNew && j.recap.streak > 1){
-      setTimeout(() => toast('第 ' + j.recap.streak + ' 天 · 连续签到'), 1200);
-    }
+    showCheckIn(j.recap);
     handleShortcut();
   } catch(e){ /* 离线也让人看得见世界 */ }
   connect();
   setInterval(fetchState, 20000);
+}
+
+let ciTimer = null;
+function showCheckIn(rec){
+  if (!rec || !rec.checkinNew || rec.first) return;
+  const el = $('checkin');
+  $('ci-n').textContent = rec.streak;
+  $('ci-sub').textContent = rec.streak === 1
+    ? (rec.gap > 36 * 3600 * 1000 ? '断了，重新开始' : '连续第 1 天')
+    : `连续第 ${rec.streak} 天`;
+  el.classList.add('on');
+  clearTimeout(ciTimer);
+  ciTimer = setTimeout(() => el.classList.remove('on'), 2100);
 }
 
 function fmtGap(ms){
@@ -1540,6 +1618,31 @@ function handleShortcut(){
   }, 900);
 }
 
+function setupNative(){
+  const C = window.Capacitor;
+  if (!C || !C.Plugins) return;
+
+  const App = C.Plugins.App;
+  if (App && App.addListener){
+    App.addListener('backButton', () => {
+      if ($('veil').classList.contains('on')) { closeCard(); return; }
+      if ($('panel').classList.contains('open')) { $('panel').classList.remove('open'); return; }
+      if ($('inspect').classList.contains('on')) { $('inspect').classList.remove('on'); return; }
+      if (App.exitApp) App.exitApp();
+    });
+    // 从后台回来：立刻刷新一次
+    App.addListener('resume', () => { fetchState(); connect(); });
+  }
+
+  const SB = C.Plugins.StatusBar;
+  if (SB){
+    try {
+      SB.setStyle({ style: 'DARK' });                    // 深色背景 + 浅色图标
+      SB.setBackgroundColor({ color: '#05070a' });
+    } catch (_) {}
+  }
+}
+
 if ('serviceWorker' in navigator && !NATIVE){
   window.addEventListener('load', () => {
     navigator.serviceWorker.register('sw.js', { scope: './' }).catch((e) => console.warn('sw 注册失败', e));
@@ -1557,6 +1660,8 @@ if ('serviceWorker' in navigator && !NATIVE){
     localStorage.setItem('ember-ios-hint', '1');
   }, 6000);
 })();
+
+if (NATIVE) setupNative();
 
 enter();
 setTimeout(()=>{ $('hint').style.opacity = '0'; }, 9000);
