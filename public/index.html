@@ -1,0 +1,1412 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#05070a">
+<meta name="description" content="一个常驻服务器的小世界。它不等你。">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" type="image/png" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-180.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="余烬">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>余烬 · EMBER</title>
+<style>
+  :root{
+    --bg:#05070a; --ink:#cfd6dc; --dim:#6a7480; --faint:#39424c;
+    --amber:#e8a34a; --teal:#6fd3c7; --rust:#b4544a;
+    --line:rgba(207,214,220,.13);
+    --mono:ui-monospace,'SFMono-Regular','JetBrains Mono',Menlo,Consolas,'Liberation Mono',monospace;
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{margin:0;height:100%;overflow:hidden;background:var(--bg);color:var(--ink);
+    font-family:var(--mono);font-size:13px;letter-spacing:.02em;
+    -webkit-font-smoothing:antialiased}
+  canvas{position:fixed;inset:0;width:100%;height:100%;display:block;touch-action:manipulation}
+
+  /* ---------- HUD ---------- */
+  .hud{position:fixed;z-index:10;pointer-events:none;text-transform:uppercase;
+    font-size:10px;letter-spacing:.22em;color:var(--dim)}
+  .hud.tl{top:calc(22px + env(safe-area-inset-top));left:calc(24px + env(safe-area-inset-left))}
+  .hud.tr{top:calc(22px + env(safe-area-inset-top));right:calc(24px + env(safe-area-inset-right));text-align:right}
+  .hud.bl{bottom:22px;left:24px}
+  .title{font-size:15px;letter-spacing:.42em;color:var(--ink);text-transform:none;margin-bottom:9px}
+  .title em{font-style:normal;color:var(--amber)}
+  .row{display:flex;gap:10px;align-items:baseline;margin:5px 0;pointer-events:none}
+  .row b{color:var(--ink);font-weight:400;letter-spacing:.14em}
+  .sep{width:22px;height:1px;background:var(--faint);display:inline-block;vertical-align:middle}
+  .dot{width:5px;height:5px;border-radius:50%;background:var(--teal);display:inline-block;
+    box-shadow:0 0 8px var(--teal);animation:breath 4s ease-in-out infinite}
+  .dot.warn{background:var(--amber);box-shadow:0 0 8px var(--amber)}
+  @keyframes breath{0%,100%{opacity:.35}50%{opacity:1}}
+
+  /* ---------- 底部操作 ---------- */
+  .dock{position:fixed;z-index:20;bottom:calc(26px + env(safe-area-inset-bottom));left:50%;transform:translateX(-50%);
+    display:flex;gap:2px;padding:2px;background:rgba(8,11,15,.55);
+    border:1px solid var(--line);backdrop-filter:blur(14px);border-radius:2px}
+  .btn{appearance:none;background:none;border:0;color:var(--dim);font-family:var(--mono);
+    font-size:10px;letter-spacing:.2em;text-transform:uppercase;padding:11px 16px;cursor:pointer;
+    position:relative;transition:color .25s,background .25s}
+  .btn:hover{color:var(--ink);background:rgba(207,214,220,.045)}
+  .btn:disabled{opacity:.28;cursor:default}
+  .btn.on{color:var(--amber)}
+  .btn .k{color:var(--faint);margin-left:6px;font-size:9px}
+  .btn+.btn{border-left:1px solid rgba(207,214,220,.07)}
+
+  /* ---------- 侧栏日记 ---------- */
+  .panel{position:fixed;z-index:25;top:0;right:0;height:100%;width:min(400px,88vw);
+    background:rgba(6,9,12,.9);backdrop-filter:blur(18px);border-left:1px solid var(--line);
+    transform:translateX(101%);transition:transform .5s cubic-bezier(.2,.8,.2,1);
+    display:flex;flex-direction:column}
+  .panel.open{transform:none}
+  .panel-h{display:flex;justify-content:space-between;align-items:center;
+    padding:22px 24px 16px;border-bottom:1px solid var(--line)}
+  .panel-h h2{margin:0;font-size:10px;letter-spacing:.3em;text-transform:uppercase;color:var(--dim);font-weight:400}
+  .x{background:none;border:0;color:var(--dim);cursor:pointer;font-size:16px;line-height:1;padding:4px}
+  .x:hover{color:var(--ink)}
+  .panel-b{overflow-y:auto;padding:8px 0 40px;flex:1;scrollbar-width:thin}
+  .panel-b::-webkit-scrollbar{width:3px}
+  .panel-b::-webkit-scrollbar-thumb{background:var(--faint)}
+  .entry{padding:14px 24px;border-bottom:1px solid rgba(207,214,220,.05);animation:fade .6s both}
+  @keyframes fade{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+  .entry .meta{font-size:9px;letter-spacing:.18em;color:var(--faint);text-transform:uppercase;margin-bottom:6px}
+  .entry .meta i{font-style:normal;color:var(--dim)}
+  .entry p{margin:0;line-height:1.75;font-size:12px;color:#a9b3bc;letter-spacing:.02em}
+  .entry.dawn p{color:#c3ccd4}
+  .entry.death .meta i,.entry.death p{color:#9d6a64}
+  .entry.mature p,.entry.word p{color:#cbb489}
+
+  /* ---------- 弹层 ---------- */
+  .veil{position:fixed;inset:0;z-index:40;background:rgba(3,5,7,.72);backdrop-filter:blur(6px);
+    display:flex;align-items:center;justify-content:center;padding:24px;opacity:0;pointer-events:none;
+    transition:opacity .45s}
+  .veil.on{opacity:1;pointer-events:auto}
+  .card{width:min(520px,100%);border:1px solid var(--line);background:rgba(8,11,15,.96);
+    padding:32px 30px;max-height:82vh;overflow-y:auto;position:relative}
+  .card h3{margin:0 0 6px;font-size:11px;letter-spacing:.3em;color:var(--amber);
+    text-transform:uppercase;font-weight:400}
+  .card .sub{color:var(--faint);font-size:10px;letter-spacing:.18em;margin-bottom:22px}
+  .card p{line-height:1.85;color:#a9b3bc;margin:0 0 14px;font-size:12.5px}
+  .card .recap{border-left:1px solid var(--faint);padding-left:16px;margin:18px 0}
+  .card .recap div{font-size:12px;color:var(--dim);line-height:2}
+  .card .recap b{color:var(--ink);font-weight:400}
+  .card .acts{display:flex;gap:8px;flex-wrap:wrap;margin-top:22px}
+  .ghost{border:1px solid var(--line);background:none;color:var(--ink);font-family:var(--mono);
+    font-size:10px;letter-spacing:.2em;text-transform:uppercase;padding:10px 18px;cursor:pointer;
+    transition:background .25s,border-color .25s}
+  .ghost:hover{background:rgba(232,163,74,.08);border-color:rgba(232,163,74,.4)}
+  .ghost.primary{color:var(--amber);border-color:rgba(232,163,74,.35)}
+  input[type=text],textarea{width:100%;background:rgba(207,214,220,.04);border:1px solid var(--line);
+    color:var(--ink);font-family:var(--mono);font-size:12.5px;padding:11px 12px;outline:none;
+    border-radius:0;resize:none}
+  input[type=text]:focus,textarea:focus{border-color:rgba(232,163,74,.45)}
+  label{display:block;font-size:9px;letter-spacing:.22em;text-transform:uppercase;color:var(--faint);margin:16px 0 7px}
+  .chips{display:flex;gap:6px;flex-wrap:wrap}
+  .chip{border:1px solid var(--line);background:none;color:var(--dim);font-family:var(--mono);
+    font-size:11px;padding:8px 13px;cursor:pointer;transition:.2s;letter-spacing:.1em}
+  .chip:hover{color:var(--ink);border-color:rgba(207,214,220,.3)}
+  .chip.on{color:var(--amber);border-color:rgba(232,163,74,.5);background:rgba(232,163,74,.07)}
+
+  /* ---------- 选中信息 ---------- */
+  .inspect{position:fixed;z-index:15;width:220px;border:1px solid var(--line);
+    background:rgba(8,11,15,.92);backdrop-filter:blur(12px);padding:14px 16px;
+    opacity:0;pointer-events:none;transition:opacity .3s;transform:translate(-50%,-100%)}
+  .inspect.on{opacity:1;pointer-events:auto}
+  .inspect .nm{font-size:13px;color:var(--ink);letter-spacing:.1em;margin-bottom:2px}
+  .inspect .sp{font-size:9px;letter-spacing:.22em;color:var(--faint);text-transform:uppercase;margin-bottom:12px}
+  .bar{height:2px;background:rgba(207,214,220,.1);margin:7px 0 10px;position:relative;overflow:hidden}
+  .bar i{position:absolute;inset:0;transform-origin:left;background:var(--teal);transition:transform .6s}
+  .bar.w i{background:#4a7fb4}
+  .kv{display:flex;justify-content:space-between;font-size:10px;color:var(--dim);letter-spacing:.12em}
+  .kv b{color:var(--ink);font-weight:400}
+
+  .toast{position:fixed;z-index:60;bottom:96px;left:50%;transform:translateX(-50%) translateY(10px);
+    background:rgba(8,11,15,.95);border:1px solid var(--line);padding:10px 18px;font-size:11px;
+    letter-spacing:.14em;color:var(--ink);opacity:0;transition:.35s;pointer-events:none;white-space:nowrap}
+  .toast.on{opacity:1;transform:translateX(-50%)}
+
+  .hint{position:fixed;z-index:10;bottom:78px;left:50%;transform:translateX(-50%);
+    font-size:9.5px;letter-spacing:.24em;color:var(--faint);text-transform:uppercase;
+    pointer-events:none;transition:opacity 1s;text-align:center;white-space:nowrap}
+
+  @media(max-width:640px){
+    .hud.tl{top:16px;left:16px}.hud.tr{top:16px;right:16px}
+    .hud.bl{display:none}
+    .dock{bottom:18px;width:calc(100% - 24px);justify-content:space-between}
+    .btn{padding:12px 6px;flex:1;font-size:9px;letter-spacing:.12em}
+    .btn .k{display:none}
+    .title{font-size:13px}
+    .hint{display:none}
+  }
+</style>
+</head>
+<body>
+<canvas id="scene"></canvas>
+
+<div class="hud tl">
+  <div class="title">余烬 <em>/</em> EMBER</div>
+  <div class="row"><span class="dot" id="live"></span><b id="clock">--:--</b><span class="sep"></span><span id="day">第 -- 天</span></div>
+  <div class="row"><span id="weather">—</span></div>
+  <div class="row"><span id="temp">—</span><span class="sep"></span><span id="hum">—</span></div>
+</div>
+
+<div class="hud tr">
+  <div class="row" style="justify-content:flex-end"><span>连续</span><b id="s-streak">—</b></div>
+  <div class="row" style="justify-content:flex-end"><span>观测者</span><b id="s-visitors">0</b></div>
+  <div class="row" style="justify-content:flex-end"><span>生长</span><b id="s-plants">0</b></div>
+  <div class="row" style="justify-content:flex-end"><span>星</span><b id="s-words">0</b></div>
+  <div class="row" style="justify-content:flex-end"><span>在线</span><b id="s-online">1</b></div>
+</div>
+
+<div class="hud bl">
+  <div class="row"><span>LOAD</span><b id="m-load">0%</b><span class="sep"></span><span>MEM</span><b id="m-mem">0%</b></div>
+  <div class="row" style="color:var(--faint)">此世界在服务器上持续运行，与是否有人在场无关</div>
+</div>
+
+<div class="hint" id="hint">点击地面点灯 · 点击植物查看 · 悬停星辰阅读留言</div>
+
+<div class="dock">
+  <button class="btn" id="b-light">点灯<span class="k">L</span></button>
+  <button class="btn" id="b-plant">播种<span class="k">P</span></button>
+  <button class="btn" id="b-word">留言<span class="k">W</span></button>
+  <button class="btn" id="b-diary">日记<span class="k">D</span></button>
+  <button class="btn" id="b-audio">声音</button>
+</div>
+
+<aside class="panel" id="panel">
+  <div class="panel-h">
+    <h2>观测日志</h2>
+    <button class="x" id="panel-x">✕</button>
+  </div>
+  <div class="panel-b" id="panel-b"></div>
+</aside>
+
+<div class="inspect" id="inspect">
+  <div class="nm" id="i-name">—</div>
+  <div class="sp" id="i-sp">—</div>
+  <div class="kv"><span>生长</span><b id="i-g">0%</b></div>
+  <div class="bar"><i id="i-gb"></i></div>
+  <div class="kv"><span>水分</span><b id="i-w">0%</b></div>
+  <div class="bar w"><i id="i-wb"></i></div>
+  <div class="kv" style="margin-top:10px"><span id="i-by">—</span><span id="i-age">—</span></div>
+  <button class="ghost" id="i-water" style="width:100%;margin-top:14px;padding:8px">浇水</button>
+</div>
+
+<div class="veil" id="veil">
+  <div class="card" id="card"></div>
+</div>
+
+<div class="toast" id="toast"></div>
+<div id="offline" style="position:fixed;z-index:35;top:calc(14px + env(safe-area-inset-top));left:50%;
+  transform:translateX(-50%) translateY(-40px);opacity:0;transition:.4s;background:rgba(180,84,74,.14);
+  border:1px solid rgba(180,84,74,.4);color:#d99a92;font-size:9.5px;letter-spacing:.22em;
+  text-transform:uppercase;padding:6px 14px;pointer-events:none">离线 · 这是上次看到的世界</div>
+
+<script>
+'use strict';
+/* ============================================================
+   余烬 · 前端
+   ============================================================ */
+const cv = document.getElementById('scene');
+const ctx = cv.getContext('2d');
+let W = 0, H = 0, DPR = 1;
+
+function resize(){
+  DPR = Math.min(window.devicePixelRatio || 1, 2);
+  W = window.innerWidth; H = window.innerHeight;
+  cv.width = Math.floor(W * DPR); cv.height = Math.floor(H * DPR);
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+}
+window.addEventListener('resize', resize);
+resize();
+
+const $ = id => document.getElementById(id);
+const clamp = (v,a=0,b=1)=> v<a?a:v>b?b:v;
+const lerp = (a,b,t)=> a+(b-a)*t;
+const TAU = Math.PI * 2;
+
+/* ---------------- 状态 ---------------- */
+/* ---------------- 运行环境 ---------------- */
+const NATIVE = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
+const BASE = NATIVE ? 'https://150.158.1.111/habitat/' : '';
+const api = (p) => BASE + p;
+function uidHeader(){
+  let u = null;
+  try { u = localStorage.getItem('ember-uid'); } catch(_){}
+  if (!u){
+    const b = crypto.getRandomValues(new Uint8Array(12));
+    u = Array.from(b).map(x => x.toString(16).padStart(2,'0')).join('');
+    try { localStorage.setItem('ember-uid', u); } catch(_){}
+  }
+  return NATIVE ? { 'X-Ember-Uid': u } : {};
+}
+
+let S = null;                 // 服务端状态
+let YOU = null;               // 自己的签到信息
+let OFFLINE = false;
+let lightSmooth = 0.1;
+let selected = null;          // 选中的植物 id
+let hoverStar = null;
+let hits = [];                // 命中区
+let lastAct = 0;
+
+/* ---------------- 确定性随机 ---------------- */
+function hash(n){ let x = Math.sin(n * 127.1) * 43758.5453; return x - Math.floor(x); }
+function rng(seed){ let s = seed * 9301 + 49297; return () => { s = (s * 9301 + 49297) % 233280; return s / 233280; }; }
+
+/* ---------------- 天空色 ---------------- */
+const SKY = {
+  night: [[7,9,15],[11,15,25],[19,25,37]],
+  dawn:  [[24,22,34],[82,60,60],[164,110,76]],
+  day:   [[94,108,118],[126,136,140],[166,172,170]],
+  dusk:  [[28,24,34],[92,58,54],[176,104,62]],
+};
+function phaseColors(light, phase){
+  const base = SKY[phase] || SKY.night;
+  return base.map(c => c.map(v => Math.round(v * (0.55 + light * 0.45))));
+}
+
+/* ---------------- 场景绘制 ---------------- */
+let t0 = performance.now();
+let stars = [];
+function buildStars(){
+  stars = [];
+  const n = Math.round(Math.min(180, W * H / 9000));
+  const r = rng(7);
+  for (let i = 0; i < n; i++){
+    stars.push({ x: r(), y: r() * 0.62, s: r() * 1.3 + 0.25, p: r() * TAU, f: 0.4 + r() * 1.6 });
+  }
+}
+buildStars();
+window.addEventListener('resize', buildStars);
+
+function groundY(){ return H * 0.72; }
+
+function draw(time, dt){
+  const light = lightSmooth;
+  const phase = S ? S.phase : 'night';
+  const cols = phaseColors(light, phase);
+
+  // 天空
+  const g = ctx.createLinearGradient(0, 0, 0, H);
+  g.addColorStop(0, `rgb(${cols[0].join(',')})`);
+  g.addColorStop(0.45, `rgb(${cols[1].join(',')})`);
+  g.addColorStop(0.78, `rgb(${cols[2].join(',')})`);
+  g.addColorStop(1, `rgb(${Math.round(cols[2][0]*0.35)},${Math.round(cols[2][1]*0.35)},${Math.round(cols[2][2]*0.35)})`);
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, W, H);
+
+  // 星
+  ctx.save();
+  for (const s of stars){
+    const a = (0.16 + 0.84 * Math.pow(Math.abs(Math.sin(time * 0.0004 * s.f + s.p)), 3)) * (1 - light * 0.82);
+    if (a <= 0.02) continue;
+    ctx.globalAlpha = a;
+    ctx.fillStyle = '#dfe8f0';
+    ctx.fillRect(s.x * W, s.y * H, s.s, s.s);
+  }
+  ctx.restore();
+
+  // 日月
+  drawSun(time, light, phase);
+
+  // 极光
+  if (S && S.weather.kind === 'aurora') drawAurora(time, light);
+
+  // 留言星辰
+  if (S) drawWords(time, light);
+
+  // 观测站环带
+  drawRing(light);
+
+  // 远山
+  drawHills(light);
+
+  // 地面
+  const gy = groundY();
+  const gg = ctx.createLinearGradient(0, gy - 30, 0, H);
+  gg.addColorStop(0, `rgba(14,18,22,${0.55 + light*0.1})`);
+  gg.addColorStop(0.35, '#0b0e12');
+  gg.addColorStop(1, '#05070a');
+  ctx.fillStyle = gg;
+  ctx.beginPath();
+  ctx.moveTo(0, gy + 6);
+  for (let x = 0; x <= W; x += 24){
+    const n = Math.sin(x * 0.004) * 6 + Math.sin(x * 0.011 + 2) * 3;
+    ctx.lineTo(x, gy + n - 10);
+  }
+  ctx.lineTo(W, H); ctx.lineTo(0, H); ctx.closePath();
+  ctx.fill();
+
+  // 地面等高线（越近越疏）
+  ctx.save();
+  for (let i = 0; i < 14; i++){
+    const t = i / 14;
+    const yy = gy + Math.pow(t, 1.7) * (H - gy);
+    const a = (0.05 - t * 0.035) * (0.5 + light * 0.5);
+    if (a <= 0.002) continue;
+    ctx.strokeStyle = `rgba(150,175,190,${a})`;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (let x = 0; x <= W; x += 16){
+      const dy = Math.sin(x * 0.006 + i * 1.7) * (2 + t * 10) + Math.sin(x * 0.0013 + i) * (3 + t * 14);
+      if (x === 0) ctx.moveTo(x, yy + dy); else ctx.lineTo(x, yy + dy);
+    }
+    ctx.stroke();
+  }
+  // 土粒
+  const seedR = rng(31);
+  for (let i = 0; i < 90; i++){
+    const px = seedR() * W;
+    const pt = seedR();
+    const py = gy + Math.pow(pt, 1.5) * (H - gy);
+    ctx.fillStyle = `rgba(190,205,215,${(0.05 + seedR() * 0.05) * (0.4 + light * 0.6)})`;
+    ctx.fillRect(px, py, 1, 1);
+  }
+  ctx.restore();
+
+  // 地面水平微光
+  ctx.strokeStyle = `rgba(232,163,74,${0.05 + light * 0.05})`;
+  ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(0, gy - 10); ctx.lineTo(W, gy - 10); ctx.stroke();
+
+  hits = [];
+
+  // 植物（按 depth 排序）
+  if (S){
+    const ps = [...S.plants].sort((a,b)=> a.depth - b.depth);
+    for (const p of ps) drawPlant(p, time, light);
+  }
+
+  // 灯
+  if (S) for (const l of S.lamps) drawLamp(l, time);
+
+  // 萤火
+  drawMotes(time, light);
+
+  // 雨
+  if (S && S.weather.kind === 'rain') drawRain(time);
+
+  // 暗角
+  const vg = ctx.createRadialGradient(W/2, H*0.55, Math.min(W,H)*0.25, W/2, H*0.55, Math.max(W,H)*0.82);
+  vg.addColorStop(0, 'rgba(0,0,0,0)');
+  vg.addColorStop(1, 'rgba(0,0,0,.62)');
+  ctx.fillStyle = vg;
+  ctx.fillRect(0, 0, W, H);
+}
+
+function drawAurora(time, light){
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  for (let k = 0; k < 3; k++){
+    const y0 = H * (0.10 + k * 0.07);
+    const amp = 26 + k * 12;
+    const g = ctx.createLinearGradient(0, y0 - 60, 0, y0 + 120);
+    const a = (0.075 - k * 0.016) * (1 - light * 0.6);
+    g.addColorStop(0, `rgba(90,220,190,0)`);
+    g.addColorStop(0.45, `rgba(90,220,190,${a})`);
+    g.addColorStop(1, `rgba(120,140,255,0)`);
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.moveTo(0, y0);
+    for (let x = 0; x <= W; x += 12){
+      const y = y0 + Math.sin(x * 0.006 + time * 0.00022 + k) * amp + Math.sin(x * 0.0017 - time * 0.0001) * amp * 0.6;
+      ctx.lineTo(x, y);
+    }
+    ctx.lineTo(W, y0 + 150); ctx.lineTo(0, y0 + 150);
+    ctx.closePath(); ctx.fill();
+  }
+  ctx.restore();
+}
+
+let mouse = { x: -999, y: -999 };
+window.addEventListener('mousemove', (e) => { mouse.x = e.clientX; mouse.y = e.clientY; });
+window.addEventListener('mouseleave', () => { mouse.x = -999; mouse.y = -999; });
+
+let hoverAuthor = null;
+const hoverLabel = document.createElement('div');
+hoverLabel.style.cssText = 'position:fixed;z-index:30;pointer-events:none;padding:5px 9px;' +
+  'background:rgba(8,11,15,.92);border:1px solid rgba(207,214,220,.14);font-size:11px;' +
+  'letter-spacing:.06em;color:#cbb489;opacity:0;transition:opacity .2s;max-width:260px;' +
+  'white-space:nowrap;overflow:hidden;text-overflow:ellipsis;transform:translate(-50%,-140%)';
+document.body.appendChild(hoverLabel);
+
+function drawWords(time, light){
+  if (!S.words.length) return;
+
+  // 先判断鼠标在哪颗星上
+  let near = null, nd = 1e9;
+  for (const w of S.words){
+    const d = Math.hypot(w.x * W - mouse.x, w.y * H - mouse.y);
+    if (d < 16 && d < nd){ near = w; nd = d; }
+  }
+  hoverAuthor = near ? near.by : null;
+  if (near){
+    hoverLabel.textContent = near.text;
+    hoverLabel.style.left = (near.x * W) + 'px';
+    hoverLabel.style.top = (near.y * H) + 'px';
+    hoverLabel.style.opacity = '1';
+  } else {
+    hoverLabel.style.opacity = '0';
+  }
+
+  // 同一个人的留言连成星座
+  const byAuthor = new Map();
+  for (const w of S.words){
+    if (!byAuthor.has(w.by)) byAuthor.set(w.by, []);
+    byAuthor.get(w.by).push(w);
+  }
+  for (const [author, list] of byAuthor){
+    if (list.length < 2) continue;
+    list.sort((a, b) => a.t - b.t);
+    const hot = hoverAuthor === author;
+    ctx.save();
+    ctx.strokeStyle = hot ? `rgba(232,163,74,.42)` : `rgba(200,214,225,.10)`;
+    ctx.lineWidth = hot ? 1 : 0.7;
+    ctx.beginPath();
+    list.forEach((w, i) => {
+      const x = w.x * W, y = w.y * H;
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    });
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // 星本体
+  for (const w of S.words){
+    const x = w.x * W, y = w.y * H;
+    const pulse = 0.5 + 0.5 * Math.sin(time * 0.0012 + w.id);
+    const hot = hoverAuthor === w.by;
+    const a = clamp((0.35 + pulse * 0.45) * (1 - light * 0.55) * w.mag * (hot ? 1.6 : 1), 0, 1);
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    const rg = ctx.createRadialGradient(x, y, 0, x, y, 7 + pulse * 4);
+    rg.addColorStop(0, `rgba(255,214,150,${a})`);
+    rg.addColorStop(1, 'rgba(255,214,150,0)');
+    ctx.fillStyle = rg;
+    ctx.beginPath(); ctx.arc(x, y, 11 + pulse * 4, 0, TAU); ctx.fill();
+    ctx.fillStyle = `rgba(255,236,200,${Math.min(1, a + 0.3)})`;
+    ctx.beginPath(); ctx.arc(x, y, hot ? 1.8 : 1.2, 0, TAU); ctx.fill();
+    ctx.restore();
+    hits.push({ type:'word', id:w.id, x, y, r: 13, data:w });
+  }
+}
+
+function drawRing(light){
+  const cy = H * 0.30;
+  const r = Math.max(W, H) * 0.95;
+  ctx.save();
+  ctx.strokeStyle = `rgba(150,170,185,${0.05 + light * 0.04})`;
+  ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.arc(W * 0.5, cy, r, Math.PI * 1.12, Math.PI * 1.88); ctx.stroke();
+  ctx.strokeStyle = `rgba(150,170,185,${0.035 + light * 0.03})`;
+  ctx.beginPath(); ctx.arc(W * 0.5, cy, r - 26, Math.PI * 1.15, Math.PI * 1.85); ctx.stroke();
+  // 刻度
+  for (let i = 0; i <= 40; i++){
+    const a = Math.PI * (1.14 + i / 40 * 0.72);
+    const x1 = W * 0.5 + Math.cos(a) * (r - 26), y1 = cy + Math.sin(a) * (r - 26);
+    const x2 = W * 0.5 + Math.cos(a) * (r - (i % 5 === 0 ? 40 : 32));
+    const y2 = cy + Math.sin(a) * (r - (i % 5 === 0 ? 40 : 32));
+    ctx.strokeStyle = `rgba(150,170,185,${i % 5 === 0 ? 0.09 : 0.04})`;
+    ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function drawHills(light){
+  const gy = groundY();
+  const layers = [
+    { y: gy - 132, amp: 30, col: `rgba(26,34,42,${0.72})`, f: 0.0016, ph: 0.7, rim: 0.10 },
+    { y: gy - 84,  amp: 24, col: `rgba(16,21,27,${0.92})`, f: 0.0026, ph: 2.1, rim: 0.07 },
+    { y: gy - 38,  amp: 16, col: `rgba(9,12,16,${1})`,     f: 0.0042, ph: 4.3, rim: 0.04 },
+  ];
+  for (const L of layers){
+    const pts = [];
+    for (let x = -20; x <= W + 20; x += 8){
+      const y = L.y + Math.sin(x * L.f + L.ph) * L.amp
+              + Math.sin(x * L.f * 2.7 + L.ph * 3) * L.amp * 0.32
+              + Math.sin(x * L.f * 0.4 + 1.7) * L.amp * 0.5;
+      pts.push([x, y]);
+    }
+    ctx.fillStyle = L.col;
+    ctx.beginPath();
+    ctx.moveTo(-20, H);
+    ctx.lineTo(-20, pts[0][1]);
+    for (const [x, y] of pts) ctx.lineTo(x, y);
+    ctx.lineTo(W + 20, H);
+    ctx.closePath();
+    ctx.fill();
+    // 山脊轮廓光
+    ctx.strokeStyle = `rgba(178,206,214,${L.rim * (0.4 + light * 0.6)})`;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(pts[0][0], pts[0][1]);
+    for (const [x, y] of pts) ctx.lineTo(x, y);
+    ctx.stroke();
+  }
+
+  // 地平线雾气
+  const hz = ctx.createLinearGradient(0, gy - 120, 0, gy + 10);
+  hz.addColorStop(0, 'rgba(150,175,190,0)');
+  hz.addColorStop(0.65, `rgba(150,175,190,${0.05 + light * 0.06})`);
+  hz.addColorStop(1, 'rgba(150,175,190,0)');
+  ctx.fillStyle = hz;
+  ctx.fillRect(0, gy - 120, W, 140);
+}
+
+function drawSun(time, light, phase){
+  const mins = S ? (S.clock.mins != null ? S.clock.mins : S.clock.h * 60 + (S.clock.m || 0)) : 360;
+  const h = mins / 60;
+  const isDay = h >= 4.5 && h <= 20;
+  // 5:00 → 19:30 为白天弧
+  const t = clamp((h - 4.5) / 15, 0, 1);
+  const gy = groundY();
+  if (isDay && light > 0.12){
+    const x = W * (0.08 + 0.84 * t);
+    const y = gy - Math.sin(Math.PI * t) * H * 0.46;
+    const r = Math.min(W, H) * 0.018;
+    // 越靠近地平线越被大气压暗
+    const alt = Math.sin(Math.PI * t);
+    const dim = 0.45 + alt * 0.55;
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    const g = ctx.createRadialGradient(x, y, 0, x, y, r * 7);
+    g.addColorStop(0, `rgba(255,226,180,${0.16 * light * dim})`);
+    g.addColorStop(0.3, `rgba(255,200,140,${0.05 * light * dim})`);
+    g.addColorStop(1, 'rgba(255,190,130,0)');
+    ctx.fillStyle = g;
+    ctx.beginPath(); ctx.arc(x, y, r * 7, 0, TAU); ctx.fill();
+    const dg = ctx.createRadialGradient(x, y, 0, x, y, r * 1.35);
+    dg.addColorStop(0, `rgba(255,248,232,${(0.55 + light * 0.22) * dim})`);
+    dg.addColorStop(0.7, `rgba(255,238,208,${(0.30 + light * 0.16) * dim})`);
+    dg.addColorStop(1, 'rgba(255,232,196,0)');
+    ctx.fillStyle = dg;
+    ctx.beginPath(); ctx.arc(x, y, r * 1.35, 0, TAU); ctx.fill();
+    ctx.restore();
+  } else {
+    // 夜里的月
+    const mt = clamp(((mins + 720) % 1440) / 1440, 0, 1);
+    const x = W * (0.12 + 0.76 * mt);
+    const y = gy - Math.sin(Math.PI * mt) * H * 0.40;
+    if (y < gy - 10){
+      const r = Math.min(W, H) * 0.019;
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+      const g = ctx.createRadialGradient(x, y, 0, x, y, r * 6);
+      g.addColorStop(0, 'rgba(210,230,255,.10)');
+      g.addColorStop(1, 'rgba(210,230,255,0)');
+      ctx.fillStyle = g;
+      ctx.beginPath(); ctx.arc(x, y, r * 6, 0, TAU); ctx.fill();
+      ctx.restore();
+      ctx.fillStyle = 'rgba(226,238,248,.55)';
+      ctx.beginPath(); ctx.arc(x, y, r, 0, TAU); ctx.fill();
+      ctx.fillStyle = 'rgba(12,16,22,.55)';
+      ctx.beginPath(); ctx.arc(x - r * 0.45, y - r * 0.3, r * 0.88, 0, TAU); ctx.fill();
+    }
+  }
+}
+
+/* 一片叶子：从 (x,y) 沿 ang 方向长出，长 len，宽 wid，向法线方向弯 bend */
+function leafPath(g, x, y, len, wid, ang, bend){
+  const ex = x + Math.cos(ang) * len;
+  const ey = y + Math.sin(ang) * len;
+  const mx = x + Math.cos(ang) * len * 0.5;
+  const my = y + Math.sin(ang) * len * 0.5;
+  const nx = -Math.sin(ang), ny = Math.cos(ang);
+  const cx = mx + nx * bend, cy = my + ny * bend;
+  g.beginPath();
+  g.moveTo(x, y);
+  g.quadraticCurveTo(cx + nx * wid, cy + ny * wid, ex, ey);
+  g.quadraticCurveTo(cx - nx * wid, cy - ny * wid, x, y);
+  g.closePath();
+}
+
+function drawPlant(p, time, light){
+  const gy = groundY();
+  const x = p.x * W;
+  const depth = p.depth || 0;
+  const baseY = gy - 8 + depth * 108;
+  const k = (0.5 + depth * 0.85) * (H / 720);
+  const g = clamp(p.growth);
+  const health = p.alive ? clamp(p.health) : 0;
+  const wind = clamp((S.weather.wind || 0) / 100, 0, 1);
+  const sway = Math.sin(time * 0.0008 + p.seed * 9) * (5 + wind * 18) * k;
+  const hMul = p.species === 'lantern' ? 0.74 : p.species === 'crystal' ? 0.9 : 1;
+  const h = (28 + 250 * Math.pow(g, 0.8)) * k * hMul;
+  const alpha = p.alive ? 0.72 + health * 0.28 : 0.32;
+  const hue = p.species === 'crystal' ? 172 : p.species === 'lantern' ? 42 : 130;
+  const sat = p.alive ? 9 + health * 13 : 4;
+  const lum = (p.alive ? 11 : 7) + health * 5 + light * 7;
+
+  ctx.save();
+  ctx.translate(x, baseY);
+
+  // 根部暗影
+  ctx.fillStyle = `rgba(0,0,0,${0.5 * alpha})`;
+  ctx.beginPath();
+  ctx.ellipse(0, 1.5, 15 * k, 3.2 * k, 0, 0, TAU);
+  ctx.fill();
+
+  const body = `hsla(${hue},${sat}%,${lum}%,${alpha})`;
+  const edge = `hsla(${hue + 16},${sat + 24}%,${lum + 19}%,${alpha * 0.42})`;
+
+  const paint = (build) => {
+    ctx.fillStyle = body;
+    build(ctx);
+    ctx.fill();
+    ctx.strokeStyle = edge;
+    ctx.lineWidth = Math.max(0.45, 0.75 * k);
+    ctx.stroke();
+  };
+
+  if (p.species === 'moss'){
+    // 底座
+    ctx.fillStyle = body;
+    ctx.beginPath();
+    ctx.ellipse(0, -2 * k, 22 * k * (0.4 + g * 0.8), 7 * k * (0.4 + g * 0.7), 0, 0, TAU);
+    ctx.fill();
+    const n = 14 + Math.round(g * 22);
+    for (let i = 0; i < n; i++){
+      const t = hash(p.seed * 97 + i) - 0.5;
+      const bl = (10 + hash(p.seed * 31 + i) * 34) * k * (0.3 + g * 1.0);
+      paint(c => leafPath(c, t * 26 * k, -2 * k, bl, 1.9 * k, -Math.PI / 2 + t * 1.7,
+                          4 * k + sway * 0.14));
+    }
+  } else if (p.species === 'fern'){
+    // 主茎
+    ctx.strokeStyle = body;
+    ctx.lineWidth = Math.max(1, 2.1 * k);
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(0, 0);
+    ctx.quadraticCurveTo(sway * 0.35, -h * 0.55, sway, -h);
+    ctx.stroke();
+    ctx.strokeStyle = edge;
+    ctx.lineWidth = Math.max(0.4, 0.7 * k);
+    ctx.stroke();
+
+    const n = 5 + Math.round(g * 7);
+    for (let i = 0; i < n; i++){
+      const t = (i + 1) / (n + 1);
+      const yy = -h * t;
+      const px = sway * t * t;
+      const bell = Math.sin(Math.PI * clamp(t * 1.1, 0, 1));
+      const len = (30 + 34 * bell) * k * (0.45 + g * 0.7);
+      const droop = (1 - t) * 8 * k;
+      for (const dir of [-1, 1]){
+        paint(c => leafPath(c, px, yy, len, (4.5 + bell * 2) * k,
+                             -Math.PI / 2 + dir * (1.0 + (1 - t) * 0.2),
+                             dir * (droop + 4 * k) + sway * 0.25));
+      }
+    }
+  } else if (p.species === 'lantern'){
+    ctx.strokeStyle = body;
+    ctx.lineWidth = Math.max(1.2, 3.1 * k);
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(0, 0);
+    ctx.quadraticCurveTo(-sway * 0.3, -h * 0.55, sway * 1.3, -h);
+    ctx.stroke();
+    ctx.strokeStyle = edge;
+    ctx.lineWidth = Math.max(0.4, 0.7 * k);
+    ctx.stroke();
+
+    // 两片小叶
+    for (const [t, dir] of [[0.34, -1], [0.52, 1]]){
+      paint(c => leafPath(c, sway * t, -h * t, 30 * k * (0.4 + g * 0.7), 3.6 * k,
+                           -Math.PI / 2 + dir * 1.15, dir * 5 * k));
+    }
+
+    // 花苞 / 灯
+    if (g > 0.3){
+      const bx = sway * 1.3, by = -h;
+      const rad = (5.2 + g * 4.4) * k;
+      const glow = p.matured ? 1 : 0.42;
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+      const rg = ctx.createRadialGradient(bx, by, 0, bx, by, 34 * k * (0.5 + g));
+      const fl = 0.72 + 0.28 * Math.sin(time * 0.0022 + p.seed * 9);
+      rg.addColorStop(0, `rgba(255,198,112,${0.6 * glow * fl})`);
+      rg.addColorStop(0.4, `rgba(255,170,80,${0.18 * glow * fl})`);
+      rg.addColorStop(1, 'rgba(255,160,70,0)');
+      ctx.fillStyle = rg;
+      ctx.beginPath(); ctx.arc(bx, by, 34 * k * (0.5 + g), 0, TAU); ctx.fill();
+      ctx.restore();
+
+      ctx.fillStyle = `rgba(255,222,166,${(p.alive ? 0.92 : 0.3) * (0.75 + 0.25 * Math.sin(time * 0.003 + p.seed))})`;
+      ctx.beginPath();
+      ctx.ellipse(bx, by, rad * 0.78, rad * 1.15, 0, 0, TAU);
+      ctx.fill();
+    }
+  } else if (p.species === 'vine'){
+    // 波浪主蔓
+    const segs = 8;
+    const pts = [];
+    for (let i = 0; i <= segs; i++){
+      const t = i / segs;
+      pts.push([Math.sin(t * 2.6 + p.seed * 6) * 20 * k * (0.4 + g) + sway * t, -h * t]);
+    }
+    ctx.strokeStyle = body;
+    ctx.lineWidth = Math.max(1, 2.2 * k);
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.beginPath();
+    ctx.moveTo(pts[0][0], pts[0][1]);
+    for (let i = 1; i <= segs; i++) ctx.lineTo(pts[i][0], pts[i][1]);
+    ctx.stroke();
+    ctx.strokeStyle = edge;
+    ctx.lineWidth = Math.max(0.4, 0.65 * k);
+    ctx.stroke();
+
+    const leaves = 4 + Math.round(g * 8);
+    for (let i = 0; i < leaves; i++){
+      const t = (i + 0.5) / leaves;
+      const idx = Math.min(segs, Math.round(t * segs));
+      const [lx, ly] = pts[idx];
+      const dir = i % 2 ? 1 : -1;
+      paint(c => leafPath(c, lx, ly, (16 + hash(p.seed * 5 + i) * 12) * k * (0.5 + g),
+                           4 * k, dir > 0 ? -0.5 : Math.PI + 0.5, dir * 4 * k));
+    }
+  } else if (p.species === 'veil'){
+    const drop = 1 - clamp(p.health);
+    const hv = h * 0.56;
+
+    // 茎：比别的植物更细、更直，像一根立着的针
+    ctx.strokeStyle = `rgba(198,218,228,${0.30 * alpha})`;
+    ctx.lineWidth = Math.max(0.6, 1.1 * k);
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(0, 0);
+    ctx.quadraticCurveTo(-sway * 0.4, -hv * 0.55, sway * 0.7, -hv);
+    ctx.stroke();
+
+    const bx = sway * 0.7, by = -hv;
+    const wd = 64 * k * (0.4 + g * 0.75);
+    const len = 92 * k * (0.35 + g * 0.85) * (1 - drop * 0.3);
+    const n = 7;
+
+    // 帷幕的膜：从冠点到各股末端围出的半透明面
+    const tips = [];
+    for (let i = 0; i < n; i++){
+      const t = i / (n - 1) - 0.5;                    // -0.5 .. 0.5
+      const spread = Math.cos(t * Math.PI) ;           // 中间长、两侧短 → 钟形
+      const sl = len * (0.42 + 0.58 * spread) * (1 - Math.abs(t) * 0.15);
+      tips.push([bx + t * wd * 1.9, by + sl, t, sl]);
+    }
+
+    ctx.save();
+    ctx.fillStyle = `rgba(198,224,236,${0.045 * alpha * (1 - drop * 0.5)})`;
+    ctx.beginPath();
+    ctx.moveTo(bx, by);
+    for (const [tx, ty, t] of tips){
+      const cx = bx + t * wd * 2.1, cy = by + (ty - by) * 0.42;
+      ctx.quadraticCurveTo(cx, cy, tx, ty);
+    }
+    ctx.closePath();
+    ctx.fill();
+
+    // 冷光
+    ctx.globalCompositeOperation = 'lighter';
+    const fl = (0.55 + 0.45 * Math.sin(time * 0.0011 + p.seed * 7)) * (0.2 + p.health * 0.8);
+    const vg = ctx.createRadialGradient(bx, by + len * 0.5, 0, bx, by + len * 0.5, wd * 1.9);
+    vg.addColorStop(0, `rgba(196,226,240,${0.13 * fl})`);
+    vg.addColorStop(1, 'rgba(180,214,232,0)');
+    ctx.fillStyle = vg;
+    ctx.beginPath(); ctx.arc(bx, by + len * 0.5, wd * 1.9, 0, TAU); ctx.fill();
+    ctx.restore();
+
+    // 每股丝
+    for (const [tx, ty, t, sl] of tips){
+      ctx.strokeStyle = `rgba(218,236,242,${(0.26 - Math.abs(t) * 0.14) * alpha})`;
+      ctx.lineWidth = Math.max(0.45, 0.9 * k);
+      ctx.beginPath();
+      ctx.moveTo(bx, by);
+      ctx.quadraticCurveTo(bx + t * wd * 2.3, by + sl * 0.38, tx, ty + sl * 0.12);
+      ctx.stroke();
+    }
+
+    // 冠
+    ctx.fillStyle = `rgba(232,244,250,${0.5 * alpha})`;
+    ctx.beginPath(); ctx.arc(bx, by, 1.9 * k, 0, TAU); ctx.fill();
+
+  } else if (p.species === 'crystal'){
+    const n = 4 + Math.round(g * 3);
+    const ch = h * 0.62;
+    for (let i = 0; i < n; i++){
+      const a = (hash(p.seed * 70 + i) - 0.5) * 1.9;
+      const hh = ch * (0.34 + hash(p.seed * 31 + i) * 0.62);
+      const wd = (4.5 + hash(p.seed * 13 + i) * 4.5) * k * (0.55 + g * 0.5);
+      const px = a * 20 * k;
+      const lean = a * 0.5 + sway * 0.12;
+      const lv = lum + (i % 2 ? 8 : -2);
+      ctx.fillStyle = `hsla(${hue},${sat + 6}%,${lv}%,${alpha * 0.9})`;
+      ctx.beginPath();
+      ctx.moveTo(px - wd, 0);
+      ctx.lineTo(px - wd * 0.55 + lean * 0.5, -hh * 0.62);
+      ctx.lineTo(px + lean, -hh);
+      ctx.lineTo(px + wd * 0.55 + lean * 0.5, -hh * 0.62);
+      ctx.lineTo(px + wd, 0);
+      ctx.closePath();
+      ctx.fill();
+      // 内棱高光
+      ctx.strokeStyle = `hsla(${hue},${sat + 30}%,${lum + 22}%,${alpha * 0.42})`;
+      ctx.lineWidth = Math.max(0.5, 0.9 * k);
+      ctx.beginPath();
+      ctx.moveTo(px + lean, -hh);
+      ctx.lineTo(px + lean * 0.4, -hh * 0.35);
+      ctx.stroke();
+    }
+  }
+
+  // 枯死标记
+  if (!p.alive){
+    ctx.strokeStyle = 'rgba(180,84,74,.4)';
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(-5, 2.5); ctx.lineTo(5, 2.5); ctx.stroke();
+  }
+
+  ctx.restore();
+
+  hits.push({ type:'plant', id:p.id, x, y: baseY - h * 0.55,
+              r: Math.max(24, 26 * k + h * 0.16), data:p });
+}
+function drawLamp(l, time){
+  const gy = groundY();
+  const x = l.x * W;
+  const baseY = gy + 2;
+  const topY = baseY - 30;
+  const flick = 0.86 + 0.14 * Math.sin(time * 0.006 + l.seed * 20) + 0.05 * Math.sin(time * 0.031 + l.seed);
+  const inten = clamp(l.intensity * flick, 0, 1.2);
+  const r = 150 + 90 * inten;
+
+  // 地面上的光斑
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  const pool = ctx.createRadialGradient(x, baseY, 0, x, baseY, r * 0.8);
+  pool.addColorStop(0, `rgba(255,178,88,${0.16 * inten})`);
+  pool.addColorStop(1, 'rgba(255,160,70,0)');
+  ctx.fillStyle = pool;
+  ctx.beginPath();
+  ctx.ellipse(x, baseY, r * 0.8, r * 0.20, 0, 0, TAU);
+  ctx.fill();
+
+  // 空中的光晕
+  const rg = ctx.createRadialGradient(x, topY, 0, x, topY, r);
+  rg.addColorStop(0, `rgba(255,196,110,${0.34 * inten})`);
+  rg.addColorStop(0.30, `rgba(255,158,66,${0.11 * inten})`);
+  rg.addColorStop(1, 'rgba(255,140,50,0)');
+  ctx.fillStyle = rg;
+  ctx.beginPath(); ctx.arc(x, topY, r, 0, TAU); ctx.fill();
+  ctx.restore();
+
+  // 灯柱
+  ctx.strokeStyle = `rgba(190,150,96,${0.34 * inten})`;
+  ctx.lineWidth = 1.6;
+  ctx.beginPath();
+  ctx.moveTo(x, baseY);
+  ctx.lineTo(x, topY + 3);
+  ctx.stroke();
+
+  // 灯头
+  ctx.fillStyle = `rgba(255,224,170,${0.92 * inten})`;
+  ctx.beginPath();
+  ctx.ellipse(x, topY, 2.6, 3.6, 0, 0, TAU);
+  ctx.fill();
+  ctx.strokeStyle = `rgba(232,163,74,${0.5 * inten})`;
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(x - 4.5, topY - 5);
+  ctx.lineTo(x + 4.5, topY - 5);
+  ctx.stroke();
+
+  hits.push({ type:'lamp', id:l.id, x, y: topY, r: 18, data:l });
+}
+
+let motes = [];
+function drawMotes(time, light){
+  if (motes.length < 46){
+    while (motes.length < 46){
+      motes.push({ x: Math.random(), y: Math.random() * 0.55, sp: 0.4 + Math.random(), ph: Math.random() * TAU, r: 0.6 + Math.random() * 1.3 });
+    }
+  }
+  const gy = groundY();
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  for (const m of motes){
+    const yy = (m.y + Math.sin(time * 0.00012 * m.sp + m.ph) * 0.04) % 0.8;
+    const xx = (m.x + Math.cos(time * 0.00009 * m.sp + m.ph) * 0.03 + 1) % 1;
+    const a = (0.10 + 0.35 * Math.pow(Math.abs(Math.sin(time * 0.0011 * m.sp + m.ph)), 4)) * (0.35 + (1 - light) * 0.65);
+    ctx.fillStyle = `rgba(200,235,225,${a})`;
+    ctx.beginPath();
+    ctx.arc(xx * W, gy * 0.25 + yy * gy * 0.9, m.r, 0, TAU);
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
+let rainDrops = [];
+function drawRain(time){
+  if (rainDrops.length === 0){
+    for (let i = 0; i < 110; i++) rainDrops.push({ x: Math.random(), y: Math.random(), sp: 0.5 + Math.random(), len: 8 + Math.random() * 16 });
+  }
+  ctx.save();
+  ctx.strokeStyle = 'rgba(170,200,215,.16)';
+  ctx.lineWidth = 1;
+  for (const d of rainDrops){
+    const y = (d.y + (time * 0.00013 * d.sp)) % 1;
+    const x = (d.x + y * 0.06) % 1;
+    ctx.beginPath();
+    ctx.moveTo(x * W, y * H);
+    ctx.lineTo(x * W - 2, y * H + d.len);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+/* ---------------- 主循环 ---------------- */
+let prev = performance.now();
+function loop(now){
+  const dt = Math.min(now - prev, 100);
+  prev = now;
+  const targetLight = S ? S.light : 0.1;
+  lightSmooth = lerp(lightSmooth, targetLight, 0.045);
+  draw(now, dt);
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+
+/* ---------------- 数据 ---------------- */
+async function fetchState(){
+  try {
+    const r = await fetch(api('api/state'), { cache:'no-store', headers: uidHeader() });
+    S = await r.json();
+    if (S.__offline) setOffline(true); else setOffline(false);
+    renderHUD();
+  } catch(e){
+    console.warn('state fail', e);
+    setOffline(true);
+  }
+}
+
+let lightInit = false;
+function renderHUD(){
+  if (!S) return;
+  if (!lightInit){ lightSmooth = S.light; lightInit = true; }
+  const hh = String(S.clock.h).padStart(2,'0');
+  const mm = String(S.clock.m).padStart(2,'0');
+  $('clock').textContent = hh + ':' + mm;
+  $('day').textContent = '第 ' + S.day + ' 天';
+  const wn = { clear:'晴', rain:'雨', fog:'雾', aurora:'极光', still:'静' }[S.weather.kind] || S.weather.kind;
+  $('weather').textContent = wn + ' · ' + S.weather.note;
+  $('temp').textContent = S.weather.temp + '°C';
+  $('hum').textContent = '湿度 ' + S.weather.humidity + '%';
+  $('s-visitors').textContent = S.stats.visitors;
+  $('s-plants').textContent = S.plants.filter(p=>p.alive).length;
+  $('s-words').textContent = S.stats.words;
+  $('s-online').textContent = S.online;
+  $('s-streak').textContent = YOU && YOU.streak ? YOU.streak + ' 天' : '—';
+  $('m-load').textContent = S.weather.load + '%';
+  $('m-mem').textContent = S.weather.mem + '%';
+  $('live').className = 'dot' + (S.weather.kind === 'aurora' ? ' warn' : '');
+  if (selected != null) updateInspect();
+}
+
+/* SSE */
+let es = null;
+function connect(){
+  try {
+    es = new EventSource(api('api/stream'));
+    es.onmessage = (e) => {
+      try { S = JSON.parse(e.data); renderHUD(); } catch(_){}
+    };
+    es.onerror = () => { try { es.close(); } catch(_){}; setTimeout(connect, 4000); };
+  } catch(_){ setTimeout(fetchState, 5000); }
+}
+
+function setOffline(on){
+  if (OFFLINE === on) return;
+  OFFLINE = on;
+  const el = document.getElementById('offline');
+  el.style.opacity = on ? '1' : '0';
+  el.style.transform = 'translateX(-50%) translateY(' + (on ? '0' : '-40px') + ')';
+}
+window.addEventListener('offline', () => setOffline(true));
+window.addEventListener('online', () => { setOffline(false); fetchState(); });
+
+/* ---------------- 交互 ---------------- */
+function toast(msg){
+  const el = $('toast');
+  el.textContent = msg; el.classList.add('on');
+  clearTimeout(el._t);
+  el._t = setTimeout(()=> el.classList.remove('on'), 2200);
+}
+
+async function act(payload){
+  const now = Date.now();
+  if (now - lastAct < 400) return;
+  lastAct = now;
+  try {
+    const r = await fetch(api('api/act'), {
+      method:'POST',
+      headers: Object.assign({'Content-Type':'application/json'}, uidHeader()),
+      body: JSON.stringify(payload),
+    });
+    const j = await r.json();
+    if (!r.ok){ toast(j.error || '失败了'); return null; }
+    if (j.state){ S = j.state; renderHUD(); }
+    return j;
+  } catch(e){ toast('连接不上'); return null; }
+}
+
+cv.addEventListener('click', (e) => {
+  const mx = e.clientX, my = e.clientY;
+  let best = null, bestD = 1e9;
+  for (const h of hits){
+    const d = Math.hypot(h.x - mx, h.y - my);
+    if (d < h.r && d < bestD){ best = h; bestD = d; }
+  }
+  if (best){
+    if (best.type === 'plant'){
+      if (best.data.species === 'veil') showVeil(best.data);
+      else selectPlant(best.data);
+    }
+    else if (best.type === 'word'){ showWord(best.data); }
+    else if (best.type === 'lamp'){ toast('一盏由「' + best.data.by + '」点的灯'); }
+    return;
+  }
+  // 空白处：点灯
+  if (my > groundY() - 120){
+    const x = clamp(mx / W, 0.03, 0.97);
+    act({ type:'light', x });
+    toast('点了一盏灯');
+  }
+});
+
+function selectPlant(p){
+  selected = p.id;
+  updateInspect();
+}
+function updateInspect(){
+  const p = (S.plants || []).find(x => x.id === selected);
+  if (!p){ $('inspect').classList.remove('on'); return; }
+  const el = $('inspect');
+  $('i-name').textContent = p.name;
+  $('i-sp').textContent = p.label + (p.alive ? (p.matured ? ' · 已长成' : ' · 生长中') : ' · 已枯萎');
+  $('i-g').textContent = Math.round(p.growth * 100) + '%';
+  $('i-gb').style.transform = 'scaleX(' + p.growth + ')';
+  $('i-w').textContent = Math.round(p.water * 100) + '%';
+  $('i-wb').style.transform = 'scaleX(' + p.water + ')';
+  $('i-by').textContent = '由 ' + p.by;
+  $('i-age').textContent = p.ageMin < 60 ? p.ageMin + ' 分钟' : Math.round(p.ageMin/60) + ' 小时';
+  const x = p.x * W;
+  const y = groundY() - 40 + p.depth * 34;
+  el.style.left = clamp(x, 120, W - 120) + 'px';
+  el.style.top = Math.max(140, y) + 'px';
+  el.classList.add('on');
+  $('i-water').disabled = !p.alive;
+  $('i-water').textContent = p.alive ? '浇水' : '已枯萎';
+}
+document.addEventListener('click', (e) => {
+  if (!e.target.closest('#inspect') && !e.target.closest('canvas')) {
+    $('inspect').classList.remove('on');
+  }
+});
+$('i-water').addEventListener('click', async () => {
+  if (selected == null) return;
+  const r = await act({ type:'water', id: selected });
+  if (r) toast('浇了水');
+});
+
+function showVeil(p){
+  openCard(`
+    <h3>无人花</h3>
+    <div class="sub">不在图鉴里 · 由「${esc(p.by)}」种下</div>
+    <p style="font-size:14px;line-height:2.1;color:#cfe0e8">${esc(p.note || '它什么也没说。')}</p>
+    <div class="recap">
+      <div>生长 <b>${Math.round(p.growth * 100)}%</b></div>
+      <div>它只在你不在的时候开着，有人回来就会合上</div>
+    </div>
+    <div class="acts"><button class="ghost" data-close>合上</button></div>
+  `);
+}
+
+function showStarMap(){
+  const map = new Map();
+  for (const w of S.words){
+    if (!map.has(w.by)) map.set(w.by, []);
+    map.get(w.by).push(w);
+  }
+  const groups = [...map.entries()].sort((a, b) => b[1].length - a[1].length);
+  const html = groups.map(([by, list]) => `
+    <div style="margin:0 0 18px">
+      <div class="sub" style="margin:0 0 8px">${esc(by)} · ${list.length} 颗</div>
+      ${list.sort((a,b)=>a.t-b.t).map(w => `<div style="color:#a9b3bc;line-height:1.9;font-size:12px">· ${esc(w.text)}</div>`).join('')}
+    </div>`).join('');
+  openCard(`
+    <h3>星图</h3>
+    <div class="sub">同一个人留下的星会连在一起 · 共 ${S.words.length} 颗</div>
+    ${html || '<p style="color:#5b6672">天上还没有星。</p>'}
+    <div class="acts"><button class="ghost" data-close>关上</button></div>
+  `);
+}
+
+function showWord(w){
+  openCard(`
+    <h3>留言 · 星辰</h3>
+    <div class="sub">${esc(w.by)} · ${new Date(w.t).toLocaleString('zh-CN')}</div>
+    <p style="font-size:15px;line-height:2;color:#e6dccb">「${esc(w.text)}」</p>
+    <div class="acts"><button class="ghost" data-close>关上</button></div>
+  `);
+}
+
+/* ---------------- 面板 ---------------- */
+$('b-diary').addEventListener('click', () => {
+  const p = $('panel');
+  p.classList.toggle('open');
+  if (p.classList.contains('open')) loadDiary();
+});
+$('panel-x').addEventListener('click', () => $('panel').classList.remove('open'));
+
+async function loadDiary(){
+  const box = $('panel-b');
+  box.innerHTML = '<div class="entry"><p style="color:#4a545e">读取中…</p></div>';
+  try {
+    const r = await fetch(api('api/chronicle?limit=120'), { cache:'no-store', headers: uidHeader() });
+    const j = await r.json();
+    box.innerHTML = j.entries.map(e => `
+      <div class="entry ${e.kind}">
+        <div class="meta"><i>${kindLabel(e.kind)}</i> · ${new Date(e.t).toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'})}</div>
+        <p>${esc(e.text)}</p>
+      </div>`).join('') || '<div class="entry"><p>还没有任何记录。</p></div>';
+  } catch(e){ box.innerHTML = '<div class="entry"><p>读不到日志。</p></div>'; }
+}
+function kindLabel(k){
+  return ({ dawn:'黎明', plant:'播种', water:'浇水', light:'灯', death:'枯萎',
+    mature:'成熟', word:'留言', first:'接入', dark:'熄灯', downtime:'中断',
+    rename:'改名', birth:'开端' })[k] || k;
+}
+
+/* ---------------- 弹层 ---------------- */
+function openCard(html){
+  $('card').innerHTML = html;
+  $('veil').classList.add('on');
+  $('card').querySelectorAll('[data-close]').forEach(b => b.addEventListener('click', closeCard));
+}
+function closeCard(){ $('veil').classList.remove('on'); }
+$('veil').addEventListener('click', (e) => { if (e.target.id === 'veil') closeCard(); });
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape'){ closeCard(); $('panel').classList.remove('open'); }
+  if (e.key === 'l' || e.key === 'L') act({ type:'light', x: Math.random()*0.7+0.15 });
+  if (e.key === 'p' || e.key === 'P') $('b-plant').click();
+  if (e.key === 'w' || e.key === 'W') $('b-word').click();
+  if (e.key === 'd' || e.key === 'D') $('b-diary').click();
+  if (e.key === 'm' || e.key === 'M') showStarMap();
+});
+
+/* ---------------- 播种 ---------------- */
+const SP_LIST = [
+  { k:'moss', n:'苔', d:'慢、耐活，不需要太多光' },
+  { k:'fern', n:'蕨', d:'中速，喜欢湿润' },
+  { k:'lantern', n:'灯芯花', d:'要光，长成后会自己发亮' },
+  { k:'vine', n:'藤', d:'长得最快，也最容易渴' },
+  { k:'crystal', n:'晶簇', d:'不喝水，靠沉默生长' },
+];
+let pickedSp = 'moss';
+$('b-plant').addEventListener('click', () => {
+  pickedSp = 'moss';
+  openCard(`
+    <h3>播种</h3>
+    <div class="sub">种子会被留在这里，即使你离开</div>
+    <label>种类</label>
+    <div class="chips" id="sp-chips">
+      ${SP_LIST.map(s => `<button class="chip ${s.k===pickedSp?'on':''}" data-sp="${s.k}" title="${s.d}">${s.n}</button>`).join('')}
+    </div>
+    <label>名字（可留空，它会自己有一个）</label>
+    <input type="text" id="p-name" maxlength="12" placeholder="比如：第一株">
+    <div class="acts">
+      <button class="ghost primary" id="do-plant">种下</button>
+      <button class="ghost" data-close>算了</button>
+    </div>
+  `);
+  $('card').querySelectorAll('[data-sp]').forEach(b => {
+    b.addEventListener('click', () => {
+      pickedSp = b.dataset.sp;
+      $('card').querySelectorAll('[data-sp]').forEach(x => x.classList.toggle('on', x === b));
+    });
+  });
+  $('do-plant').addEventListener('click', async () => {
+    const name = $('p-name').value.trim();
+    const r = await act({ type:'plant', species: pickedSp, name });
+    if (r){ closeCard(); toast('「' + (r.plant.name) + '」种下了'); }
+  });
+});
+
+/* ---------------- 留言 ---------------- */
+$('b-word').addEventListener('click', () => {
+  openCard(`
+    <h3>留言</h3>
+    <div class="sub">它会变成天上的一颗星，一直挂着</div>
+    <label>写点什么（40 字以内）</label>
+    <textarea id="w-text" rows="3" maxlength="40" placeholder="给以后回来的自己，或者给这里"></textarea>
+    <div class="acts">
+      <button class="ghost primary" id="do-word">挂上去</button>
+      <button class="ghost" data-close>算了</button>
+    </div>
+  `);
+  $('do-word').addEventListener('click', async () => {
+    const text = $('w-text').value.trim();
+    if (!text){ toast('空的'); return; }
+    const r = await act({ type:'word', text });
+    if (r){ closeCard(); toast('星挂上了'); }
+  });
+});
+
+/* ---------------- 点灯 ---------------- */
+$('b-light').addEventListener('click', () => {
+  act({ type:'light', x: Math.random()*0.7+0.15 });
+  toast('点了一盏灯');
+});
+
+/* ---------------- 声音 ---------------- */
+let audio = null;
+$('b-audio').addEventListener('click', () => {
+  if (!audio) audio = makeAudio();
+  const on = audio.toggle();
+  $('b-audio').classList.toggle('on', on);
+});
+function makeAudio(){
+  const AC = window.AudioContext || window.webkitAudioContext;
+  if (!AC) return { toggle: () => false };
+  const ac = new AC();
+  const master = ac.createGain(); master.gain.value = 0; master.connect(ac.destination);
+  const filt = ac.createBiquadFilter(); filt.type = 'lowpass'; filt.frequency.value = 700; filt.Q.value = 0.6;
+  filt.connect(master);
+  // 三个失谐正弦
+  [55, 82.5, 110.3, 164.8].forEach((f, i) => {
+    const o = ac.createOscillator(); o.type = i % 2 ? 'triangle' : 'sine'; o.frequency.value = f;
+    const g = ac.createGain(); g.gain.value = 0.16 / (i + 1);
+    o.connect(g); g.connect(filt); o.start();
+    const lfo = ac.createOscillator(); lfo.frequency.value = 0.03 + i * 0.017;
+    const lg = ac.createGain(); lg.gain.value = 0.05 / (i + 1);
+    lfo.connect(lg); lg.connect(g.gain); lfo.start();
+  });
+  // 风噪
+  const buf = ac.createBuffer(1, ac.sampleRate * 3, ac.sampleRate);
+  const d = buf.getChannelData(0);
+  for (let i = 0; i < d.length; i++) d[i] = (Math.random()*2-1) * 0.35;
+  const src = ac.createBufferSource(); src.buffer = buf; src.loop = true;
+  const nf = ac.createBiquadFilter(); nf.type = 'bandpass'; nf.frequency.value = 420; nf.Q.value = 0.8;
+  const ng = ac.createGain(); ng.gain.value = 0.05;
+  src.connect(nf); nf.connect(ng); ng.connect(master); src.start();
+  let on = false;
+  return {
+    toggle(){
+      on = !on;
+      if (ac.state === 'suspended') ac.resume();
+      master.gain.cancelScheduledValues(ac.currentTime);
+      master.gain.linearRampToValueAtTime(on ? 0.35 : 0, ac.currentTime + (on ? 2.5 : 1.2));
+      return on;
+    }
+  };
+}
+
+/* ---------------- 工具 ---------------- */
+function esc(s){ return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+/* ---------------- 首次进入 / 回归 ---------------- */
+async function enter(){
+  await fetchState();
+  try {
+    const r = await fetch(api('api/visit'), { method:'POST', headers: Object.assign({'Content-Type':'application/json'}, uidHeader()), body:'{}' });
+    const j = await r.json();
+    S = j.state;
+    YOU = j.state.you || null;
+    renderHUD();
+    showRecap(j.recap);
+    if (j.recap && j.recap.checkinNew && j.recap.streak > 1){
+      setTimeout(() => toast('第 ' + j.recap.streak + ' 天 · 连续签到'), 1200);
+    }
+    handleShortcut();
+  } catch(e){ /* 离线也让人看得见世界 */ }
+  connect();
+  setInterval(fetchState, 20000);
+}
+
+function fmtGap(ms){
+  const m = Math.floor(ms/60000);
+  if (m < 1) return '几秒';
+  if (m < 60) return m + ' 分钟';
+  const h = Math.floor(m/60);
+  if (h < 24) return h + ' 小时';
+  return Math.floor(h/24) + ' 天 ' + (h%24) + ' 小时';
+}
+
+function showRecap(rec){
+  if (!rec) return;
+  if (rec.first){
+    openCard(`
+      <h3>接入观测站</h3>
+      <div class="sub">第 ${rec.day} 天 · 你是第 ${rec.visitors} 位观测者</div>
+      <p>这里是一个一直开着的小世界。它不等你 —— 你不在的时候，它照样天亮、下雨、长东西、枯掉。</p>
+      <p>你能做的只有三件事：<b style="color:#e8a34a">点灯</b>、<b style="color:#e8a34a">播种</b>、<b style="color:#e8a34a">留言</b>。留言会变成天上的星，一直挂着。</p>
+      <p style="color:#5b6672">下次回来，它会告诉你你错过了什么。每天来一次算一次签到，连续七天，地里会多一株「守夜」。</p>
+      <p style="color:#5b6672">装到手机主屏幕之后，断网也能看见上次的世界。</p>
+      <div class="acts"><button class="ghost primary" data-close>进去</button></div>
+    `);
+    return;
+  }
+  if (rec.gap < 5 * 60000) return;
+  const evs = (rec.events || []).slice(-6).map(e =>
+    `<div>· ${esc(e.text)}</div>`).join('');
+  openCard(`
+    <h3>你离开了 ${fmtGap(rec.gap)}</h3>
+    <div class="sub">世界走到第 ${rec.day} 天</div>
+    <div class="recap">
+      <div>新种下 <b>${rec.newPlants}</b> 株</div>
+      <div>枯掉 <b>${rec.died}</b> 株</div>
+      <div>新的星 <b>${rec.words}</b> 颗</div>
+    </div>
+    ${evs ? `<label>期间发生</label><div class="recap">${evs}</div>` : '<p style="color:#5b6672">什么也没发生。安静也是一种记录。</p>'}
+    <div class="acts"><button class="ghost primary" data-close>我知道了</button></div>
+  `);
+}
+
+function handleShortcut(){
+  const q = new URLSearchParams(location.search);
+  const open = q.get('open'), act0 = q.get('act');
+  if (!open && !act0) return;
+  history.replaceState(null, '', location.pathname);
+  if (open === 'diary') setTimeout(() => { $('panel').classList.add('open'); loadDiary(); }, 700);
+  if (open === 'map') setTimeout(showStarMap, 700);
+  if (open === 'plant') setTimeout(() => $('b-plant').click(), 700);
+  if (act0 === 'light') setTimeout(() => {
+    act({ type:'light', x: Math.random() * 0.6 + 0.2 });
+    toast('点了一盏灯');
+  }, 900);
+}
+
+if ('serviceWorker' in navigator && !NATIVE){
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('sw.js', { scope: './' }).catch((e) => console.warn('sw 注册失败', e));
+  });
+}
+
+// iOS 没有安装提示，自己给一句
+(function iosHint(){
+  const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
+  const standalone = window.matchMedia('(display-mode: standalone)').matches || navigator.standalone;
+  if (!isIOS || standalone) return;
+  if (localStorage.getItem('ember-ios-hint')) return;
+  setTimeout(() => {
+    toast('分享 → 添加到主屏幕，就能当 App 用');
+    localStorage.setItem('ember-ios-hint', '1');
+  }, 6000);
+})();
+
+enter();
+setTimeout(()=>{ $('hint').style.opacity = '0'; }, 9000);
+</script>
+</body>
+</html>
