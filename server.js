@@ -19,7 +19,7 @@ const DATA_DIR = process.env.DATA_DIR || path.join(ROOT, 'data');
 const WORLD_FILE = path.join(DATA_DIR, 'world.json');
 const CHRONICLE_FILE = path.join(DATA_DIR, 'chronicle.jsonl');
 
-const TICK_MS = 5000;            // 模拟步长
+const TICK_MS = parseInt(process.env.TICK_MS || '5000', 10); // 模拟步长
 const WORLD_MIN_PER_SEC = parseFloat(process.env.WORLD_SPEED || '0.0667'); // 一个世界日 = 6 小时
 const SAVE_MS = parseInt(process.env.SAVE_MS || '20000', 10);
 
@@ -370,7 +370,7 @@ function composeDawn() {
 
 // ---------------------------------------------------------------- 无人花
 const VEIL_NAMES = ['无言', '空室', '长夜', '无人', '留白', '久坐', '未寄', '余温'];
-const SILENCE_MS = 3 * 3600 * 1000;   // 3 小时没有访客
+const SILENCE_MS = parseInt(process.env.SILENCE_MS || String(3 * 3600 * 1000), 10); // 3 小时没有访客
 
 function composeVeil(silenceMs) {
   const mins = Math.floor(silenceMs / 60000);
