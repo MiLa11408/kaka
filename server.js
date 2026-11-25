@@ -479,7 +479,7 @@ function publicState() {
       ageMin: Math.round((Date.now() - p.plantedAt) / 60000),
     })),
     lamps: world.lamps.map(l => ({ id: l.id, x: l.x, by: l.by, intensity: Math.round(l.intensity * 100) / 100, seed: l.seed })),
-    words: world.words.map(w => ({ id: w.id, text: w.text, by: w.by, t: w.t, x: w.x, y: w.y, mag: w.mag })),
+    words: world.words.map(w => ({ id: w.id, text: w.text, by: w.by, t: w.t, x: w.x, y: w.y, mag: w.mag, parentId: w.parentId || null })),
     log: world.log.slice(-40),
     stats: world.stats,
     uptime: process.uptime(),
@@ -748,17 +748,31 @@ const server = http.createServer(async (req, res) => {
     if (type === 'word') {
       const text = cleanText(body.text, 40);
       if (!text) return json(res, 400, { error: '空的' });
+
+      // 回应：贴着原来那颗星生成，位置和亮度都从它派生
+      const parentId = Number(body.replyTo) || null;
+      const parent = parentId ? world.words.find(w => w.id === parentId) : null;
+
       const w = {
         id: world.seq++, text, by: v.name, t: Date.now(),
-        x: rnd(0.05, 0.95), y: rnd(0.08, 0.52), mag: rnd(0.6, 1.4),
+        x: parent ? clamp(parent.x + rnd(-0.06, 0.06), 0.04, 0.96) : rnd(0.05, 0.95),
+        y: parent ? clamp(parent.y + rnd(-0.05, 0.05), 0.06, 0.54) : rnd(0.08, 0.52),
+        mag: parent ? clamp(parent.mag * 0.92 + 0.1, 0.4, 1.5) : rnd(0.6, 1.4),
+        parentId: parent ? parent.id : null,
       };
       world.words.push(w);
       if (world.words.length > 400) world.words.shift();
       world.stats.words++;
       v.words++;
-      pushLog('word', `${v.name} 留下一句话：「${text}」它挂在天上，像一颗不太亮的星。`);
+
+      if (parent) {
+        world.stats.replies = (world.stats.replies || 0) + 1;
+        pushLog('reply', `${v.name} 回应了「${parent.text}」：「${text}」两颗星之间多了一条线。`);
+      } else {
+        pushLog('word', `${v.name} 留下一句话：「${text}」它挂在天上，像一颗不太亮的星。`);
+      }
       scheduleSave();
-      return json(res, 200, { ok: true, word: { id: w.id, text: w.text }, state: publicState() });
+      return json(res, 200, { ok: true, word: { id: w.id, text: w.text, parentId: w.parentId }, state: publicState() });
     }
 
     if (type === 'rename') {

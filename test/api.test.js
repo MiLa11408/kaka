@@ -143,6 +143,24 @@ test('留言：变成星，超长被截断', async () => {
   assert.ok(w.text.length <= 40, '应该截断到 40 字，实际 ' + w.text.length);
 });
 
+test('回应：落在父星附近并带 parentId', async () => {
+  const a = await act({ type: 'word', text: '原话' });
+  const b = await act({ type: 'word', text: '回应的话', replyTo: a.word.id });
+  assert.equal(b.word.parentId, a.word.id);
+  const s = await getState();
+  const pa = s.words.find((w) => w.id === a.word.id);
+  const pb = s.words.find((w) => w.id === b.word.id);
+  assert.ok(pa && pb);
+  assert.ok(Math.abs(pa.x - pb.x) < 0.15, '回应应该靠近父星');
+  assert.ok(Math.abs(pa.y - pb.y) < 0.15);
+});
+
+test('回应：父星不存在时退化成普通留言', async () => {
+  const r = await act({ type: 'word', text: '对着空气说话', replyTo: 987654 });
+  assert.equal(r.ok, true);
+  assert.equal(r.word.parentId, null);
+});
+
 test('留言：空文本被拒', async () => {
   const r = await api('/api/act', { method: 'POST', body: JSON.stringify({ type: 'word', text: '   ' }) });
   assert.equal(r.status, 400);

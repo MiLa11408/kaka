@@ -139,6 +139,15 @@
     font-size:9.5px;letter-spacing:.24em;color:var(--faint);text-transform:uppercase;
     pointer-events:none;transition:opacity 1s;text-align:center;white-space:nowrap}
 
+  :focus-visible{outline:1px solid var(--amber);outline-offset:2px}
+  .btn:focus-visible,.ghost:focus-visible,.chip:focus-visible{outline:1px solid var(--amber);outline-offset:2px}
+
+  @media (prefers-reduced-motion: reduce){
+    *,*::before,*::after{animation-duration:.001ms!important;animation-iteration-count:1!important;
+      transition-duration:.001ms!important;scroll-behavior:auto!important}
+    .dot{animation:none;opacity:1}
+  }
+
   @media(max-width:640px){
     .hud.tl{top:16px;left:16px}.hud.tr{top:16px;right:16px}
     .hud.bl{display:none}
@@ -151,7 +160,10 @@
 </style>
 </head>
 <body>
-<canvas id="scene"></canvas>
+<canvas id="scene" role="img" aria-label="余烬：一片会自己生长的空地。屏幕上的植物、灯和星都在随时间变化。"></canvas>
+<div style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)">
+  可用键盘：L 点灯，P 播种，W 留言，D 日记，M 星图，S 存档，Esc 关闭。
+</div>
 
 <div class="hud tl">
   <div class="title">余烬 <em>/</em> EMBER</div>
@@ -176,12 +188,12 @@
 <div class="hint" id="hint">点击地面点灯 · 点击植物查看 · 悬停星辰阅读留言</div>
 
 <div class="dock">
-  <button class="btn" id="b-light">点灯<span class="k">L</span></button>
-  <button class="btn" id="b-plant">播种<span class="k">P</span></button>
-  <button class="btn" id="b-word">留言<span class="k">W</span></button>
-  <button class="btn" id="b-diary">日记<span class="k">D</span></button>
-  <button class="btn" id="b-save">存档<span class="k">S</span></button>
-  <button class="btn" id="b-audio">声音</button>
+  <button class="btn" id="b-light" title="点一盏灯（L）">点灯<span class="k">L</span></button>
+  <button class="btn" id="b-plant" title="播种（P）">播种<span class="k">P</span></button>
+  <button class="btn" id="b-word" title="留一句话（W）">留言<span class="k">W</span></button>
+  <button class="btn" id="b-diary" title="观测日志（D）">日记<span class="k">D</span></button>
+  <button class="btn" id="b-save" title="存一张图（S）">存档<span class="k">S</span></button>
+  <button class="btn" id="b-audio" title="环境音">声音</button>
 </div>
 
 <aside class="panel" id="panel">
@@ -479,6 +491,23 @@ function drawWords(time, light){
       const x = w.x * W, y = w.y * H;
       if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
     });
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // 回应：两颗星之间的虚线
+  for (const w of S.words){
+    if (!w.parentId) continue;
+    const p = S.words.find(x => x.id === w.parentId);
+    if (!p) continue;
+    const hot = hoverAuthor === w.by;
+    ctx.save();
+    ctx.setLineDash([3, 4]);
+    ctx.strokeStyle = hot ? 'rgba(111,211,199,.55)' : 'rgba(111,211,199,.30)';
+    ctx.lineWidth = hot ? 1.2 : 0.9;
+    ctx.beginPath();
+    ctx.moveTo(p.x * W, p.y * H);
+    ctx.lineTo(w.x * W, w.y * H);
     ctx.stroke();
     ctx.restore();
   }
@@ -1236,12 +1265,20 @@ function showStarMap(){
 }
 
 function showWord(w){
+  const parent = w.parentId ? S.words.find(x => x.id === w.parentId) : null;
+  const kids = S.words.filter(x => x.parentId === w.id).length;
   openCard(`
     <h3>留言 · 星辰</h3>
     <div class="sub">${esc(w.by)} · ${new Date(w.t).toLocaleString('zh-CN')}</div>
+    ${parent ? `<div class="recap" style="margin:0 0 14px"><div>回应：「${esc(parent.text)}」</div></div>` : ''}
     <p style="font-size:15px;line-height:2;color:#e6dccb">「${esc(w.text)}」</p>
-    <div class="acts"><button class="ghost" data-close>关上</button></div>
+    ${kids ? `<div class="sub" style="margin-top:14px">${kids} 条回应挂在这颗星旁边</div>` : ''}
+    <div class="acts">
+      <button class="ghost primary" id="do-reply">回应</button>
+      <button class="ghost" data-close>关上</button>
+    </div>
   `);
+  $('do-reply').addEventListener('click', () => composeWord(w));
 }
 
 /* ---------------- 面板 ---------------- */
@@ -1296,7 +1333,7 @@ async function loadDiary(){
 function kindLabel(k){
   return ({ dawn:'黎明', plant:'播种', water:'浇水', light:'灯', death:'枯萎',
     mature:'成熟', word:'留言', first:'接入', dark:'熄灯', downtime:'中断',
-    rename:'改名', birth:'开端', checkin:'签到', streak:'守夜', veil:'无人花' })[k] || k;
+    rename:'改名', birth:'开端', checkin:'签到', streak:'守夜', veil:'无人花', reply:'回应' })[k] || k;
 }
 
 /* ---------------- 弹层 ---------------- */
@@ -1356,24 +1393,26 @@ $('b-plant').addEventListener('click', () => {
 });
 
 /* ---------------- 留言 ---------------- */
-$('b-word').addEventListener('click', () => {
+function composeWord(parent){
   openCard(`
-    <h3>留言</h3>
-    <div class="sub">它会变成天上的一颗星，一直挂着</div>
+    <h3>${parent ? '回应' : '留言'}</h3>
+    <div class="sub">${parent ? '你的星会落在它旁边，中间连一条线' : '它会变成天上的一颗星，一直挂着'}</div>
+    ${parent ? `<div class="recap" style="margin:0 0 16px"><div>${esc(parent.by)}：「${esc(parent.text)}」</div></div>` : ''}
     <label>写点什么（40 字以内）</label>
-    <textarea id="w-text" rows="3" maxlength="40" placeholder="给以后回来的自己，或者给这里"></textarea>
+    <textarea id="w-text" rows="3" maxlength="40" placeholder="${parent ? '回应这句话' : '给以后回来的自己，或者给这里'}"></textarea>
     <div class="acts">
-      <button class="ghost primary" id="do-word">挂上去</button>
+      <button class="ghost primary" id="do-word">${parent ? '挂上去' : '挂上去'}</button>
       <button class="ghost" data-close>算了</button>
     </div>
   `);
   $('do-word').addEventListener('click', async () => {
     const text = $('w-text').value.trim();
     if (!text){ toast('空的'); return; }
-    const r = await act({ type:'word', text });
-    if (r){ closeCard(); toast('星挂上了'); }
+    const r = await act({ type:'word', text, replyTo: parent ? parent.id : undefined });
+    if (r){ closeCard(); toast(parent ? '回应挂上了' : '星挂上了'); }
   });
-});
+}
+$('b-word').addEventListener('click', () => composeWord(null));
 
 /* ---------------- 点灯 ---------------- */
 $('b-light').addEventListener('click', () => {

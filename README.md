@@ -35,6 +35,7 @@
 | **点灯** | 照亮附近的植物，帮它们生长；灯会自己熄灭 |
 | **播种** | 五个物种，各有生长速率、耗水量、光照需求和耐受力 |
 | **留言** | 变成天上一颗星，永久挂着；同一个人的星会连成星座 |
+| **回应** | 贴着别人的星挂一颗新的，中间连一条虚线 |
 | **存档** | 把此刻的世界离屏重绘成一张 1600×1000 的 PNG，带落款 |
 
 植物缺水会掉健康，掉光就枯死。下雨会自动补水。
@@ -123,6 +124,7 @@ GET  /api/stream                 SSE 推送（5s）
 GET  /api/chronicle?limit=200    观测日志（倒序）
 POST /api/visit                  记录到访，返回「你不在的时候」摘要 + 签到
 POST /api/act  {type: light|plant|water|word|rename}
+                word 可带 replyTo，回应会贴着父星生成
 GET  /api/health                 无鉴权，供探活
 ```
 
@@ -141,6 +143,12 @@ public/manifest.webmanifest
 icon.html              图标的 SVG 源，用浏览器截图导出各尺寸 PNG
 nginx-ember.conf       反代示例
 ```
+
+## 无障碍
+
+- 键盘：`L` 点灯 `P` 播种 `W` 留言 `D` 日记 `M` 星图 `S` 存档 `Esc` 关闭
+- 焦点环、`aria-label`、屏幕阅读器可读的快捷键说明
+- 尊重 `prefers-reduced-motion`，关掉呼吸灯、滑入和淡入
 
 ## 已知取舍
 
