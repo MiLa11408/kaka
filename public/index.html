@@ -75,6 +75,14 @@
   .entry .meta i{font-style:normal;color:var(--dim)}
   .entry p{margin:0;line-height:1.75;font-size:12px;color:#a9b3bc;letter-spacing:.02em}
   .entry.dawn p{color:#c3ccd4}
+  .diary-sum{display:flex;gap:2px;padding:16px 18px 18px;border-bottom:1px solid var(--line)}
+  .diary-sum div{flex:1;text-align:center}
+  .diary-sum b{display:block;font-size:17px;color:var(--ink);font-weight:400;letter-spacing:.04em}
+  .diary-sum span{display:block;font-size:8.5px;letter-spacing:.2em;color:var(--faint);margin-top:5px;text-transform:uppercase}
+  .day-sep{display:flex;justify-content:space-between;align-items:baseline;padding:18px 24px 8px;
+    font-size:9px;letter-spacing:.26em;color:var(--faint);text-transform:uppercase;position:sticky;top:0;
+    background:linear-gradient(rgba(6,9,12,.97) 60%,rgba(6,9,12,0));backdrop-filter:blur(2px);z-index:2}
+  .day-sep em{font-style:normal;letter-spacing:.12em}
   .entry.death .meta i,.entry.death p{color:#9d6a64}
   .entry.mature p,.entry.word p{color:#cbb489}
 
@@ -172,6 +180,7 @@
   <button class="btn" id="b-plant">播种<span class="k">P</span></button>
   <button class="btn" id="b-word">留言<span class="k">W</span></button>
   <button class="btn" id="b-diary">日记<span class="k">D</span></button>
+  <button class="btn" id="b-save">存档<span class="k">S</span></button>
   <button class="btn" id="b-audio">声音</button>
 </div>
 
@@ -210,7 +219,7 @@
    余烬 · 前端
    ============================================================ */
 const cv = document.getElementById('scene');
-const ctx = cv.getContext('2d');
+let ctx = cv.getContext('2d');
 let W = 0, H = 0, DPR = 1;
 
 function resize(){
@@ -977,6 +986,80 @@ function loop(now){
 }
 requestAnimationFrame(loop);
 
+/* ---------------- 存档：把这一刻画成一张图 ---------------- */
+function snapshot(w, h){
+  const oc = document.createElement('canvas');
+  oc.width = Math.round(w * DPR);
+  oc.height = Math.round(h * DPR);
+  const og = oc.getContext('2d');
+  og.setTransform(DPR, 0, 0, DPR, 0, 0);
+
+  // 借用主绘制逻辑，只是把画布换掉
+  const oldCtx = ctx, oldW = W, oldH = H, oldHits = hits;
+  ctx = og; W = w; H = h; hits = [];
+  try {
+    draw(performance.now(), 16);
+    drawCaption(og, w, h);
+  } finally {
+    ctx = oldCtx; W = oldW; H = oldH; hits = oldHits;
+  }
+  return oc;
+}
+
+function drawCaption(g, w, h){
+  if (!S) return;
+  const wn = { clear:'晴', rain:'雨', fog:'雾', aurora:'极光', still:'静' }[S.weather.kind] || '';
+  const hh = String(S.clock.h).padStart(2, '0');
+  const mm = String(S.clock.m).padStart(2, '0');
+
+  g.save();
+  const grad = g.createLinearGradient(0, h - 150, 0, h);
+  grad.addColorStop(0, 'rgba(5,7,10,0)');
+  grad.addColorStop(1, 'rgba(5,7,10,0.88)');
+  g.fillStyle = grad;
+  g.fillRect(0, h - 150, w, 150);
+
+  const pad = Math.round(w * 0.03);
+  g.textBaseline = 'alphabetic';
+
+  g.fillStyle = '#cfd6dc';
+  g.font = '600 20px ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace';
+  g.fillText(`第 ${S.day} 天  ${hh}:${mm}  ${wn}`, pad, h - 74);
+
+  g.fillStyle = '#6a7480';
+  g.font = '14px ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace';
+  const last = (S.log && S.log.length) ? S.log[S.log.length - 1].text : '还没有任何记录。';
+  g.fillText(truncate(last, Math.floor(w / 14)), pad, h - 46);
+
+  g.fillStyle = '#55616d';
+  g.font = '12px ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace';
+  g.textAlign = 'right';
+  g.fillText('余烬 · EMBER', w - pad, h - 74);
+  g.fillText(new Date().toLocaleDateString('zh-CN'), w - pad, h - 46);
+  g.restore();
+}
+
+function truncate(s, n){
+  s = String(s || '');
+  return s.length > n ? s.slice(0, n - 1) + '…' : s;
+}
+
+function savePostcard(){
+  if (!S){ toast('还没有世界可以存'); return; }
+  const oc = snapshot(1600, 1000);
+  oc.toBlob((blob) => {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `余烬-第${S.day}天-${String(S.clock.h).padStart(2,'0')}${String(S.clock.m).padStart(2,'0')}.png`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 3000);
+    toast('存好了');
+  }, 'image/png');
+}
+
 /* ---------------- 数据 ---------------- */
 async function fetchState(){
   try {
@@ -1175,17 +1258,45 @@ async function loadDiary(){
   try {
     const r = await fetch(api('api/chronicle?limit=120'), { cache:'no-store', headers: uidHeader() });
     const j = await r.json();
-    box.innerHTML = j.entries.map(e => `
-      <div class="entry ${e.kind}">
-        <div class="meta"><i>${kindLabel(e.kind)}</i> · ${new Date(e.t).toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'})}</div>
-        <p>${esc(e.text)}</p>
-      </div>`).join('') || '<div class="entry"><p>还没有任何记录。</p></div>';
+    const list = j.entries || [];
+    if (!list.length){
+      box.innerHTML = '<div class="entry"><p>还没有任何记录。</p></div>';
+      return;
+    }
+
+    // 按世界日分组，越近的越靠上
+    const groups = [];
+    for (const e of list){
+      const d = e.day || 0;
+      if (!groups.length || groups[groups.length - 1].day !== d) groups.push({ day: d, items: [] });
+      groups[groups.length - 1].items.push(e);
+    }
+
+    const head = `
+      <div class="diary-sum">
+        <div><b>${S.day}</b><span>世界日</span></div>
+        <div><b>${S.plants.filter(p => p.alive).length}</b><span>存活</span></div>
+        <div><b>${S.words.length}</b><span>星辰</span></div>
+        <div><b>${YOU && YOU.streak ? YOU.streak : '—'}</b><span>连续</span></div>
+      </div>`;
+
+    const body = groups.map(g => {
+      const date = g.items[0] ? new Date(g.items[0].t).toLocaleDateString('zh-CN', { month:'2-digit', day:'2-digit' }) : '';
+      const rows = g.items.map(e => `
+        <div class="entry ${e.kind}">
+          <div class="meta"><i>${kindLabel(e.kind)}</i> · ${new Date(e.t).toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit'})}</div>
+          <p>${esc(e.text)}</p>
+        </div>`).join('');
+      return `<div class="day-sep"><span>第 ${g.day || '—'} 天</span><em>${date}</em></div>${rows}`;
+    }).join('');
+
+    box.innerHTML = head + body;
   } catch(e){ box.innerHTML = '<div class="entry"><p>读不到日志。</p></div>'; }
 }
 function kindLabel(k){
   return ({ dawn:'黎明', plant:'播种', water:'浇水', light:'灯', death:'枯萎',
     mature:'成熟', word:'留言', first:'接入', dark:'熄灯', downtime:'中断',
-    rename:'改名', birth:'开端' })[k] || k;
+    rename:'改名', birth:'开端', checkin:'签到', streak:'守夜', veil:'无人花' })[k] || k;
 }
 
 /* ---------------- 弹层 ---------------- */
@@ -1203,6 +1314,7 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'w' || e.key === 'W') $('b-word').click();
   if (e.key === 'd' || e.key === 'D') $('b-diary').click();
   if (e.key === 'm' || e.key === 'M') showStarMap();
+  if (e.key === 's' || e.key === 'S') savePostcard();
 });
 
 /* ---------------- 播种 ---------------- */
@@ -1268,6 +1380,8 @@ $('b-light').addEventListener('click', () => {
   act({ type:'light', x: Math.random()*0.7+0.15 });
   toast('点了一盏灯');
 });
+
+$('b-save').addEventListener('click', savePostcard);
 
 /* ---------------- 声音 ---------------- */
 let audio = null;

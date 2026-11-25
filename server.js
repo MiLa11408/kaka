@@ -122,7 +122,7 @@ function scheduleSave() {
 
 // ---------------------------------------------------------------- 日志 / 日记
 function pushLog(kind, text, extra) {
-  const entry = { id: world ? world.seq++ : 0, t: Date.now(), kind, text, ...(extra || {}) };
+  const entry = { id: world ? world.seq++ : 0, t: Date.now(), day: world ? world.day : 1, kind, text, ...(extra || {}) };
   world.log.push(entry);
   if (world.log.length > 400) world.log.splice(0, world.log.length - 400);
   try {
