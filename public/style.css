@@ -15,7 +15,7 @@ input{font-family:inherit}
 
 /* ---------------- 主界面 ---------------- */
 .screen{position:fixed;inset:0}
-#main{display:flex;flex-direction:column;
+#main{display:flex;flex-direction:column;touch-action:none;
   padding:calc(12px + env(safe-area-inset-top)) 14px calc(12px + env(safe-area-inset-bottom))}
 
 header{display:flex;justify-content:space-between;align-items:center;z-index:4}

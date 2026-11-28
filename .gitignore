@@ -1,5 +1,5 @@
 ﻿data/
-.uitest/
+.uitest*/
 __*.html
 tmp*/
 *.apk

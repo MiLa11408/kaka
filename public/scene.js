@@ -6,8 +6,10 @@ const Scene = (() => {
   const DPR = Math.min(devicePixelRatio || 1, 2);
   const T0 = Date.now();
   let W = 0, H = 0;
+  let WORLD_W = 0, camX = 0;          // 世界比屏幕宽，可左右拖动
   let mine = [], others = [];
   let FORCE_H = null;
+  let weather = 'clear';              // clear / cloudy / overcast / rain / snow
 
   // 老 WebView 没有 roundRect，补一个
   if (!CanvasRenderingContext2D.prototype.roundRect) {
@@ -70,7 +72,10 @@ const Scene = (() => {
     cv.width = Math.round(W * DPR);
     cv.height = Math.round(H * DPR);
     ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    WORLD_W = Math.max(Math.round(W * 2.6), 1200);
+    camX = Math.min(camX, Math.max(0, WORLD_W - W));
   }
+  const clampCam = (v) => Math.min(Math.max(0, WORLD_W - W), Math.max(0, v));
 
   /* ---------------- 各个部件 ---------------- */
 
@@ -104,6 +109,7 @@ const Scene = (() => {
   }
 
   function sunMoon(P, gy, h, t) {
+    if (weather === 'overcast' || weather === 'rain') return;   // 阴雨看不到太阳
     const isDay = h >= 6 && h <= 19.5;
     if (isDay) {
       const k = (h - 6) / 13.5;
@@ -135,6 +141,9 @@ const Scene = (() => {
 
   function clouds(P, t) {
     const defs = [[0.05, 0.11, 9, 1], [0.42, 0.07, 13, 0.7], [0.7, 0.17, 7, 1.3], [0.22, 0.22, 5.5, 0.9]];
+    if (weather === 'overcast' || weather === 'rain' || weather === 'snow') {
+      defs.push([0.15, 0.05, 16, 0.5], [0.52, 0.12, 18, 0.45], [0.82, 0.06, 14, 0.5], [0.33, 0.16, 15, 0.4]);
+    }
     ctx.fillStyle = rgb(P.cloud);
     for (const [bx, by, r, sp] of defs) {
       const span = W + 260;
@@ -152,18 +161,19 @@ const Scene = (() => {
   function hills(P, gy) {
     ctx.fillStyle = rgb(P.hillFar);
     ctx.beginPath(); ctx.moveTo(0, H);
-    for (let x = 0; x <= W + 10; x += 10) ctx.lineTo(x, farY(x, gy));
-    ctx.lineTo(W, H); ctx.closePath(); ctx.fill();
+    for (let x = 0; x <= WORLD_W + 10; x += 10) ctx.lineTo(x, farY(x, gy));
+    ctx.lineTo(WORLD_W, H); ctx.closePath(); ctx.fill();
 
-    house(P, gy, W * 0.13, farY(W * 0.13, gy) + 6);
+    house(P, gy, WORLD_W * 0.13, farY(WORLD_W * 0.13, gy) + 6);
+    house(P, gy, WORLD_W * 0.74, farY(WORLD_W * 0.74, gy) + 6);
 
     ctx.fillStyle = rgb(P.hillNear);
     ctx.beginPath(); ctx.moveTo(0, H);
-    for (let x = 0; x <= W + 10; x += 10) ctx.lineTo(x, nearY(x, gy));
-    ctx.lineTo(W, H); ctx.closePath(); ctx.fill();
+    for (let x = 0; x <= WORLD_W + 10; x += 10) ctx.lineTo(x, nearY(x, gy));
+    ctx.lineTo(WORLD_W, H); ctx.closePath(); ctx.fill();
 
-    for (let i = 0; i < 16; i++) {                    // 远处的小花
-      const x = rnd(i * 11 + 2) * W, y = nearY(x, gy) + 8 + rnd(i * 13) * 18;
+    for (let i = 0; i < 34; i++) {                    // 远处的小花
+      const x = rnd(i * 11 + 2) * WORLD_W, y = nearY(x, gy) + 8 + rnd(i * 13) * 18;
       ctx.fillStyle = rgb([255, 255, 255], 0.6 + 0.4 * P.light);
       ctx.beginPath(); ctx.arc(x, y, 2, 0, 6.2832); ctx.fill();
     }
@@ -187,19 +197,19 @@ const Scene = (() => {
   function ground(P, gy) {
     ctx.fillStyle = rgb(P.ground);
     ctx.beginPath(); ctx.moveTo(0, gy + 10);
-    for (let x = 0; x <= W + 20; x += 20) ctx.lineTo(x, gy + 6 + Math.sin(x * 0.012 + 1) * 4);
-    ctx.lineTo(W, H); ctx.lineTo(0, H); ctx.closePath(); ctx.fill();
+    for (let x = 0; x <= WORLD_W + 20; x += 20) ctx.lineTo(x, gy + 6 + Math.sin(x * 0.012 + 1) * 4);
+    ctx.lineTo(WORLD_W, H); ctx.lineTo(0, H); ctx.closePath(); ctx.fill();
 
     ctx.strokeStyle = rgb(P.ground, 1.18);            // 草沿的一道亮边
     ctx.lineWidth = 7; ctx.lineCap = 'round';
     ctx.beginPath();
-    for (let x = 0; x <= W + 20; x += 20) { const y = gy + 6 + Math.sin(x * 0.012 + 1) * 4; if (x === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y); }
+    for (let x = 0; x <= WORLD_W + 20; x += 20) { const y = gy + 6 + Math.sin(x * 0.012 + 1) * 4; if (x === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y); }
     ctx.stroke();
 
     ctx.strokeStyle = rgb(P.ground, 0.8);             // 草丛
     ctx.lineWidth = 2;
-    for (let i = 0; i < 80; i++) {
-      const x = rnd(i * 17 + 1) * W, y = gy + 26 + rnd(i * 19 + 5) * (H - gy - 40);
+    for (let i = 0; i < 170; i++) {
+      const x = rnd(i * 17 + 1) * WORLD_W, y = gy + 26 + rnd(i * 19 + 5) * (H - gy - 40);
       ctx.beginPath();
       ctx.moveTo(x, y); ctx.lineTo(x - 3, y - 7);
       ctx.moveTo(x, y); ctx.lineTo(x, y - 10);
@@ -207,21 +217,23 @@ const Scene = (() => {
       ctx.stroke();
     }
 
-    // 泥坑：猪的最爱
-    const mx = W * 0.5, my = gy + (H - gy) * 0.72, rx = W * 0.34, ry = Math.min(34, (H - gy) * 0.1);
-    ctx.fillStyle = rgb([150, 104, 78], Math.max(0.5, P.light));
-    ctx.beginPath(); ctx.ellipse(mx, my + 4, rx, ry, 0, 0, 6.2832); ctx.fill();
-    ctx.fillStyle = rgb([176, 126, 94], Math.max(0.5, P.light));
-    ctx.beginPath(); ctx.ellipse(mx, my, rx, ry, 0, 0, 6.2832); ctx.fill();
-    ctx.fillStyle = `rgba(255,255,255,${0.18 * P.light})`;
-    ctx.beginPath(); ctx.ellipse(mx - rx * 0.3, my - ry * 0.3, rx * 0.22, ry * 0.25, -0.4, 0, 6.2832); ctx.fill();
+    // 泥坑：猪的最爱（两处，分散在世界里）
+    for (const [fx, scale] of [[0.32, 1], [0.72, 0.8]]) {
+      const mx = WORLD_W * fx, my = gy + (H - gy) * 0.72, rx = W * 0.3 * scale, ry = Math.min(34, (H - gy) * 0.1) * scale;
+      ctx.fillStyle = rgb([150, 104, 78], Math.max(0.5, P.light));
+      ctx.beginPath(); ctx.ellipse(mx, my + 4, rx, ry, 0, 0, 6.2832); ctx.fill();
+      ctx.fillStyle = rgb([176, 126, 94], Math.max(0.5, P.light));
+      ctx.beginPath(); ctx.ellipse(mx, my, rx, ry, 0, 0, 6.2832); ctx.fill();
+      ctx.fillStyle = `rgba(255,255,255,${0.18 * P.light})`;
+      ctx.beginPath(); ctx.ellipse(mx - rx * 0.3, my - ry * 0.3, rx * 0.22, ry * 0.25, -0.4, 0, 6.2832); ctx.fill();
+    }
   }
 
   function fence(P, gy) {
     const step = 46;
     const wood = rgb(P.fence), woodD = rgb(P.fence, 0.78);
     const y0 = gy - 52;
-    for (let x = -8; x < W + step; x += step) {
+    for (let x = -8; x < WORLD_W + step; x += step) {
       ctx.fillStyle = wood;
       ctx.beginPath(); ctx.roundRect(x, y0, 11, 60, [5, 5, 1, 1]); ctx.fill();
       ctx.fillStyle = woodD;
@@ -229,9 +241,9 @@ const Scene = (() => {
     }
     for (const ry of [y0 + 14, y0 + 38]) {
       ctx.fillStyle = woodD;
-      ctx.beginPath(); ctx.roundRect(0, ry, W, 9, 4); ctx.fill();
+      ctx.beginPath(); ctx.roundRect(0, ry, WORLD_W, 9, 4); ctx.fill();
       ctx.fillStyle = wood;
-      ctx.beginPath(); ctx.roundRect(0, ry + 1, W, 6, 3); ctx.fill();
+      ctx.beginPath(); ctx.roundRect(0, ry + 1, WORLD_W, 6, 3); ctx.fill();
     }
   }
 
@@ -239,22 +251,14 @@ const Scene = (() => {
 
   function drawPlant(p, alpha, t, P) {
     const gy = groundY();
-    const x = p.x * W, y = plantY(p), s = plantScale(p);
+    const x = p.x * WORLD_W, y = plantY(p), s = plantScale(p);
     const g = p.growth;
     const h = (8 + 44 * g) * s;
     const sway = Math.sin(t * 1.1 + p.x * 9) * 0.05 * g;
     const leaf = rgb([79, 157, 74], Math.max(0.55, P.light));
     const leaf2 = rgb([104, 182, 92], Math.max(0.55, P.light));
 
-    const ring = (top) => {
-      if (alpha !== 1 || g >= 0.999) return;
-      const cy = top;
-      ctx.strokeStyle = 'rgba(0,0,0,.16)';
-      ctx.lineWidth = 2.2 * s;
-      ctx.beginPath(); ctx.arc(0, cy, 7 * s, 0, 6.2832); ctx.stroke();
-      ctx.strokeStyle = '#ffcf4d';
-      ctx.beginPath(); ctx.arc(0, cy, 7 * s, -Math.PI / 2, -Math.PI / 2 + 6.2832 * g); ctx.stroke();
-    };
+    const ring = () => {};   // 生长进度改为点开植物查看，画面上不再套圈
 
     ctx.save();
     ctx.globalAlpha = alpha;
@@ -316,6 +320,25 @@ const Scene = (() => {
           ctx.beginPath(); ctx.arc(dx * mr, top + mr * 0.35 + dy * mr, r * mr, 0, 6.2832); ctx.fill();
         }
       }
+    } else if (p.species === 'watermelon') {
+      if (f > 0) {                                                 // 一个带纹的西瓜
+        const wr = 9 * f * s;
+        ctx.fillStyle = '#4f9d55';
+        ctx.beginPath(); ctx.ellipse(0, top + wr * 1.1, wr, wr * 0.92, 0, 0, 6.2832); ctx.fill();
+        ctx.strokeStyle = '#2f7038'; ctx.lineWidth = 1.3 * s;
+        for (const k of [-0.5, 0, 0.5]) {
+          ctx.beginPath(); ctx.moveTo(k * wr * 0.9, top + wr * 0.3); ctx.quadraticCurveTo(k * wr * 1.3, top + wr * 1.1, k * wr * 0.9, top + wr * 1.9); ctx.stroke();
+        }
+      }
+    } else if (p.species === 'corn') {
+      if (f > 0) {                                                 // 玉米棒
+        const cr = 6 * f * s;
+        ctx.fillStyle = '#f2c94c';
+        ctx.beginPath(); ctx.ellipse(3 * s, top + cr * 2.2, cr, cr * 2.2, 0.05, 0, 6.2832); ctx.fill();
+        ctx.fillStyle = '#7bbf5a';
+        ctx.beginPath(); ctx.ellipse(-2 * s, top + cr * 1.4, cr * 0.55, cr * 1.9, -0.35, 0, 6.2832); ctx.fill();
+        ctx.beginPath(); ctx.ellipse(8 * s, top + cr * 1.6, cr * 0.55, cr * 1.8, 0.35, 0, 6.2832); ctx.fill();
+      }
     } else if (f > 0) {
       const fr = (p.species === 'sunflower' ? 11 : 7.5) * f * s;
       const petal = p.species === 'sunflower' ? [255, 205, 66]
@@ -356,7 +379,7 @@ const Scene = (() => {
   function fireflies(P, t) {
     if (P.star < 0.6) return;
     for (let i = 0; i < 12; i++) {
-      const x = (rnd(i * 23) + Math.sin(t * 0.4 + i) * 0.04) * W;
+      const x = (rnd(i * 23) + Math.sin(t * 0.4 + i) * 0.04) * WORLD_W;
       const y = groundY() + 20 + (rnd(i * 29) + Math.cos(t * 0.5 + i * 1.7) * 0.05) * (H - groundY() - 60);
       ctx.globalAlpha = P.star * (0.35 + 0.65 * Math.abs(Math.sin(t * 2 + i * 1.9)));
       ctx.fillStyle = '#fff3a0';
@@ -371,7 +394,7 @@ const Scene = (() => {
     for (let i = 0; i < 10; i++) {
       const s0 = i * 17;
       const sp = 0.010 + rnd(s0) * 0.012;
-      const x = ((rnd(s0 + 1) + t * sp) % 1) * (W + 80) - 40;
+      const x = ((rnd(s0 + 1) + t * sp) % 1) * (WORLD_W + 80) - 40;
       const y = ((rnd(s0 + 2) + t * sp * 0.62) % 1) * (H * 0.8);
       const sway = Math.sin(t * 1.1 + i) * 9;
       const size = 2 + rnd(s0 + 3) * 2.4;
@@ -384,6 +407,85 @@ const Scene = (() => {
     ctx.globalAlpha = 1;
   }
 
+  /* ---------------- 天气 ---------------- */
+
+  function applyWeather(P) {
+    if (weather === 'overcast' || weather === 'rain') {
+      const k = weather === 'rain' ? 0.62 : 0.72;
+      P.skyTop = P.skyTop.map((v) => v * k);
+      P.skyBot = P.skyBot.map((v) => v * (k + 0.08));
+      P.hillFar = P.hillFar.map((v) => v * 0.8);
+      P.hillNear = P.hillNear.map((v) => v * 0.78);
+      P.ground = P.ground.map((v) => v * 0.82);
+      P.cloud = [126, 132, 142];
+      P.star = 0;
+      P.warm = 0;
+      P.light *= 0.8;
+    } else if (weather === 'snow') {
+      P.skyTop = P.skyTop.map((v) => Math.min(255, v * 0.55 + 120));
+      P.skyBot = P.skyBot.map((v) => Math.min(255, v * 0.4 + 170));
+      P.ground = P.ground.map((v) => Math.min(255, v * 0.55 + 70));
+      P.hillFar = P.hillFar.map((v) => Math.min(255, v * 0.4 + 110));
+      P.hillNear = P.hillNear.map((v) => Math.min(255, v * 0.45 + 100));
+      P.cloud = [230, 234, 240];
+      P.star = Math.min(P.star, 0.2);
+      P.light = Math.min(1, P.light + 0.15);
+    } else if (weather === 'cloudy') {
+      P.light *= 0.92;
+      P.cloud = [235, 238, 242];
+    }
+  }
+
+  function weatherFx(P, t) {
+    if (weather === 'overcast') {
+      ctx.fillStyle = `rgba(90,100,115,${0.1 * P.light + 0.05})`;
+      ctx.fillRect(0, 0, W, H);
+    }
+    if (weather === 'rain') {
+      ctx.fillStyle = 'rgba(70,84,104,.14)';
+      ctx.fillRect(0, 0, W, H);
+      ctx.strokeStyle = 'rgba(196,222,255,.6)';
+      ctx.lineWidth = 1.4;
+      ctx.lineCap = 'round';
+      for (let i = 0; i < 90; i++) {
+        const sp = 0.45 + rnd(i * 7) * 0.55;
+        const x = ((rnd(i * 3) * W + t * 30 * sp) % (W + 60)) - 30;
+        const y = ((rnd(i * 5) * H + t * 620 * sp) % (H + 40)) - 20;
+        ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x - 5, y + 16); ctx.stroke();
+      }
+      // 地面水花
+      ctx.fillStyle = 'rgba(210,230,255,.35)';
+      for (let i = 0; i < 18; i++) {
+        const x = (rnd(i * 13) * W + t * 12) % W;
+        const y = H - 20 - rnd(i * 11) * 26;
+        ctx.beginPath(); ctx.ellipse(x, y, 4, 1.4, 0, 0, 6.2832); ctx.fill();
+      }
+    }
+    if (weather === 'snow') {
+      ctx.fillStyle = 'rgba(255,255,255,.55)';
+      for (let i = 0; i < 70; i++) {
+        const sp = 0.3 + rnd(i * 9) * 0.5;
+        const x = ((rnd(i * 3) * W + Math.sin(t * 0.7 + i) * 26 + t * 18 * sp) % (W + 40)) - 20;
+        const y = ((rnd(i * 5) * H + t * 90 * sp) % (H + 30)) - 15;
+        const r = 1.4 + rnd(i * 7) * 2.2;
+        ctx.beginPath(); ctx.arc(x, y, r, 0, 6.2832); ctx.fill();
+      }
+    }
+  }
+
+  /* 点在植物上？返回最近的一株（世界坐标换算后判断） */
+  function hitPlant(cx, cy) {
+    const wx = cx + camX;
+    let best = null, bestD = 1e9;
+    for (const p of mine) {
+      const s = plantScale(p);
+      const px = p.x * WORLD_W, py = plantY(p) - 26 * s;
+      const d = Math.hypot(wx - px, cy - py);
+      if (d < 26 * s && d < bestD) { bestD = d; best = p; }
+    }
+    return best;
+  }
+
   /* ---------------- 一帧 ---------------- */
 
   function render() {
@@ -391,6 +493,7 @@ const Scene = (() => {
     const d = new Date();
     const h = FORCE_H != null ? FORCE_H : d.getHours() + d.getMinutes() / 60 + d.getSeconds() / 3600;
     const P = palette(h);
+    applyWeather(P);
     const gy = groundY();
     const t = (Date.now() - T0) / 1000;
 
@@ -398,6 +501,8 @@ const Scene = (() => {
     stars(P, t);
     sunMoon(P, gy, h, t);
     clouds(P, t);
+    ctx.save();
+    ctx.translate(-camX, 0);
     hills(P, gy);
     ground(P, gy);
     fence(P, gy);
@@ -405,12 +510,20 @@ const Scene = (() => {
     for (const p of mine) drawPlant(p, 1, t, P);
     fireflies(P, t);
     petals(P, t);
+    ctx.restore();
+    weatherFx(P, t);
   }
 
   return {
-    resize, render, groundY,
+    resize, render, groundY, plantY, plantScale, hitPlant,
     setPlants(m, o) { mine = m || []; others = o || []; },
-    plantY, plantScale,
+    worldW: () => WORLD_W,
+    camX: () => camX,
+    setCam(x) { camX = clampCam(x); render(); },
+    panBy(dx) { camX = clampCam(camX + dx); render(); return camX; },
+    screenToWorld(x) { return x + camX; },
+    setWeather(w) { weather = w || 'clear'; render(); },
+    weather: () => weather,
     forceHour(h) { FORCE_H = h; render(); },
     hour() { return FORCE_H != null ? FORCE_H : new Date().getHours() + new Date().getMinutes() / 60; },
   };

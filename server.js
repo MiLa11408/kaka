@@ -39,6 +39,8 @@ const SPECIES = {
   strawberry:{ name: '草莓',   tall: false },
   pumpkin:   { name: '南瓜',   tall: false },
   mushroom:  { name: '蘑菇',   tall: false },
+  watermelon:{ name: '西瓜',   tall: false },
+  corn:      { name: '玉米',   tall: true },
 };
 const FOCUS_MINUTES = String(process.env.FOCUS_MINUTES || '25,45').split(',').map(Number); // 测试时可改短
 const ADMIN_NAMES = new Set(String(process.env.ADMIN_NAME || '').split(',').map((s) => s.trim()).filter(Boolean));
@@ -206,7 +208,11 @@ function cardDetail(u) {
 }
 
 function plantView(p) {
-  return { ...p, growth: clamp((Date.now() - p.plantedAt) / GROW_MS, 0, 1), name: SPECIES[p.species].name };
+  const base = clamp((Date.now() - p.plantedAt) / GROW_MS, 0, 1);
+  const water = p.water == null ? 0.4 : p.water;
+  const fert = p.fert || 0;
+  const growth = clamp(base * (0.82 + water * 0.12 + fert * 0.06), 0, 1);
+  return { ...p, water, fert, growth, name: SPECIES[p.species].name };
 }
 
 function presenceOf(uid) {
@@ -343,7 +349,7 @@ function undoDraw(u, r) {
 
 function giveSeed(u, minutes) {
   if (!flags.seeds || (u.seeds || []).length >= MAX_SEEDS) return null;
-  const s = { id: 's_' + crypto.randomBytes(4).toString('hex'), species: pick(minutes >= 45 ? ['sunflower', 'tulip', 'pumpkin', 'mushroom'] : ['daisy', 'carrot', 'strawberry']), at: Date.now() };
+  const s = { id: 's_' + crypto.randomBytes(4).toString('hex'), species: pick(minutes >= 45 ? ['sunflower', 'tulip', 'pumpkin', 'mushroom', 'corn'] : ['daisy', 'carrot', 'strawberry', 'watermelon']), at: Date.now() };
   u.seeds.push(s);
   return { id: s.id, species: s.species, name: SPECIES[s.species].name };
 }
@@ -686,7 +692,7 @@ const server = http.createServer(async (req, res) => {
       if (idx < 0) return json(res, 404, { error: 'no-seed', message: '没有这颗种子' });
       if (me.plants.length >= MAX_PLANTS) return json(res, 409, { error: 'full', message: `地里最多 ${MAX_PLANTS} 株` });
       const seed = me.seeds.splice(idx, 1)[0];
-      const pl = { id: 'p_' + crypto.randomBytes(4).toString('hex'), species: seed.species, x: clamp(parseFloat(body.x) || Math.random(), 0.03, 0.97), depth: Math.random(), plantedAt: Date.now() };
+      const pl = { id: 'p_' + crypto.randomBytes(4).toString('hex'), species: seed.species, x: clamp(parseFloat(body.x) || Math.random(), 0.03, 0.97), depth: Math.random(), plantedAt: Date.now(), water: 0.4, fert: 0, lastWater: 0, lastFert: 0 };
       me.plants.push(pl);
       await saveUser(me);
       return json(res, 200, { ok: true, plant: plantView(pl), me: meView(me) });
@@ -697,6 +703,33 @@ const server = http.createServer(async (req, res) => {
       me.plants = me.plants.filter((x) => x.id !== body.id);
       await saveUser(me);
       return json(res, 200, { ok: true, removed: before !== me.plants.length, me: meView(me) });
+    }
+    /* 浇水 / 施肥：各有冷却 */
+    if (p === '/api/plant/water' && req.method === 'POST') {
+      const body = await readBody(req);
+      const pl = (me.plants || []).find((x) => x.id === body.id);
+      if (!pl) return json(res, 404, { error: 'no-plant' });
+      const now = Date.now();
+      const CD = 10 * 60 * 1000;
+      if (pl.lastWater && now - pl.lastWater < CD) {
+        return json(res, 429, { error: 'cooling', message: `再等 ${Math.ceil((CD - (now - pl.lastWater)) / 60000)} 分钟才能再浇水` });
+      }
+      pl.water = 1; pl.lastWater = now;
+      await saveUser(me);
+      return json(res, 200, { ok: true, plant: plantView(pl), me: meView(me) });
+    }
+    if (p === '/api/plant/fertilize' && req.method === 'POST') {
+      const body = await readBody(req);
+      const pl = (me.plants || []).find((x) => x.id === body.id);
+      if (!pl) return json(res, 404, { error: 'no-plant' });
+      const now = Date.now();
+      const CD = 60 * 60 * 1000;
+      if (pl.lastFert && now - pl.lastFert < CD) {
+        return json(res, 429, { error: 'cooling', message: `再等 ${Math.ceil((CD - (now - pl.lastFert)) / 60000)} 分钟才能再施肥` });
+      }
+      pl.fert = 1; pl.lastFert = now;
+      await saveUser(me);
+      return json(res, 200, { ok: true, plant: plantView(pl), me: meView(me) });
     }
 
     /* ---- 头像 ---- */

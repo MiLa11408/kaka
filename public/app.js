@@ -21,6 +21,7 @@ let es = null, pit = null;
 let planting = null;
 let focusOpen = true;
 let soundOn = localStorage.getItem('pig.sound') !== '0';
+let forcedWeather = '';        // ?w=rain 调试/预览用
 
 /* 服务器时钟偏移：endsAt 是服务器时间，必须换成「我这边的时间」再比较，
    否则两边时钟差几分钟就会出现「刚点开始就说结束」。 */
@@ -450,16 +451,17 @@ function setPigMode(mode) {
 
 function pigTick(dt) {
   if (pigS.vw !== innerWidth) applyPigMode(pigS.mode);
-  const W = innerWidth, gy = Scene.groundY();
+  const WW = Scene.worldW();
+  const gy = Scene.groundY();
   const range = Math.min(focusingNow ? 92 : 150, (innerHeight - gy) * 0.5);
   const y0 = gy + 70, now = performance.now();
-  const half = 66;                                   // 猪身一半宽，别走到屏幕外
+  const half = 66;                                   // 猪身一半宽，别走出猪圈
   const hour = Scene.hour();
   const sleeping = hour >= 23 || hour < 6;
   $('zzz').classList.toggle('hidden', !sleeping || pigS.walking);
 
-  if (!pigS.y) { pigS.y = y0 + range * 0.35; pigS.x = W / 2; }
-  $('zzz').style.left = (pigS.x + 26) + 'px';
+  if (!pigS.y) { pigS.y = y0 + range * 0.35; pigS.x = WW / 2; }
+  $('zzz').style.left = (pigS.x - Scene.camX() + 26) + 'px';
   $('zzz').style.top = (pigS.y - 108) + 'px';
 
   if (pigS.walking) {
@@ -470,7 +472,7 @@ function pigTick(dt) {
       pigS.walking = false; setPigMode('idle');
       pigS.until = now + (focusingNow ? 6000 : 1800) + Math.random() * (sleeping ? 10000 : 4200);
     } else {
-      pigS.x = clamp(pigS.x + (dx / dist) * sp * dt, half, W - half);
+      pigS.x = clamp(pigS.x + (dx / dist) * sp * dt, half, WW - half);
       pigS.y += (dy / dist) * sp * dt;
       if (Math.abs(dx) > 1) pigS.dir = dx < 0 ? 1 : -1;    // 素材本身朝左
     }
@@ -484,12 +486,12 @@ function pigTick(dt) {
       pigS.dir = Math.random() < 0.5 ? 1 : -1;
       pigS.until = now + 1400 + Math.random() * 2000;
     } else {
-      pigS.tx = half + Math.random() * Math.max(20, W - half * 2);
+      pigS.tx = half + Math.random() * Math.max(20, WW - half * 2);
       pigS.ty = y0 + Math.random() * range;
       pigS.walking = true; setPigMode('walk');
     }
   }
-  pig.style.left = (pigS.x + pigS.ox) + 'px';
+  pig.style.left = (pigS.x - Scene.camX() + pigS.ox) + 'px';
   pig.style.top = (pigS.y + pigS.oy) + 'px';
   pig.style.scale = pigS.dir > 0 ? '1 1' : '-1 1';
 }
@@ -586,16 +588,19 @@ function openViewer(id, level) {
 }
 
 /* ---------------- 种子 / 植物 ---------------- */
-const PLANT_EMOJI = { sunflower: '🌻', tulip: '🌷', carrot: '🥕', daisy: '🌼', strawberry: '🍓', pumpkin: '🎃', mushroom: '🍄' };
+const PLANT_EMOJI = { sunflower: '🌻', tulip: '🌷', carrot: '🥕', daisy: '🌼', strawberry: '🍓', pumpkin: '🎃', mushroom: '🍄', watermelon: '🍉', corn: '🌽' };
 const emojiOf = (sp) => PLANT_EMOJI[sp] || '🌱';
 
 function openSeeds() {
   const seeds = ME.seeds || [];
   if (!seeds.length) { toast('没有种子。完成一次专注就会得到一颗。'); return; }
-  const bd = openSheet('种点什么', `<p class="note">选一颗，然后点一下地选位置。种下后 2 小时长满，离开也会长。</p>
-    <div class="list">${seeds.map((s) => `<div class="item"><span style="font-size:22px">${emojiOf(s.species)}</span><b>${s.name}</b><button class="mini pink" data-seed="${s.id}">种下</button></div>`).join('')}</div>
+  const groups = {};
+  for (const s of seeds) (groups[s.species] ||= []).push(s);
+  const rows = Object.values(groups).map((g) => ({ species: g[0].species, name: g[0].name, ids: g.map((x) => x.id) }));
+  const bd = openSheet('种点什么', `<p class="note">相同的种子会合并成一栏。选一种，然后点一下地选位置。种下后 2 小时长满，点植物可以浇水施肥。</p>
+    <div class="list">${rows.map((r) => `<div class="item"><span style="font-size:22px">${emojiOf(r.species)}</span><b>${r.name}</b><small>×${r.ids.length}</small><button class="mini pink" data-seed="${r.ids[0]}">种下</button></div>`).join('')}</div>
     <div class="sec">地里（${(ME.plants || []).length} / 16）</div>
-    ${(ME.plants || []).length ? `<div class="list">${ME.plants.map((p) => `<div class="item"><span style="font-size:20px">${emojiOf(p.species)}</span><b>${p.name}</b><small>${Math.round(p.growth * 100)}%</small><button class="del" data-pull="${p.id}" title="拔掉">✕</button></div>`).join('')}</div>` : '<p class="note">还空着。</p>'}`);
+    ${(ME.plants || []).length ? `<div class="list">${ME.plants.map((p) => `<div class="item" data-plant="${p.id}"><span style="font-size:20px">${emojiOf(p.species)}</span><b>${p.name}</b><small>${Math.round(p.growth * 100)}%</small><button class="del" data-pull="${p.id}" title="拔掉">✕</button></div>`).join('')}</div>` : '<p class="note">还空着。</p>'}`);
   bd.querySelectorAll('[data-seed]').forEach((b) => b.addEventListener('click', () => {
     planting = b.dataset.seed;
     closeSheet();
@@ -605,6 +610,39 @@ function openSeeds() {
     const r = await call('/api/plant/remove', { id: b.dataset.pull });
     if (r.status === 200) { adopt(r.body.me); refresh(); openSeeds(); toast('拔掉了'); }
   }));
+  bd.querySelectorAll('[data-plant]').forEach((el) => el.addEventListener('click', (e) => {
+    if (e.target.closest('[data-pull]')) return;
+    const p = (ME.plants || []).find((x) => x.id === el.dataset.plant);
+    if (p) openPlant(p);
+  }));
+}
+
+/* 植物详情：成长进度、水分、施肥 */
+function openPlant(p) {
+  const pct = Math.round(p.growth * 100);
+  const wet = Math.round((p.water == null ? 0.4 : p.water) * 100);
+  const bd = openSheet(p.name, `
+    <div class="tiles">
+      <div class="tile"><b>${pct}%</b><span>成长</span></div>
+      <div class="tile"><b>${wet}%</b><span>水分</span></div>
+    </div>
+    <div style="height:10px;border-radius:6px;background:#efe6dc;overflow:hidden;margin:12px 0">
+      <i style="display:block;height:100%;width:${pct}%;background:linear-gradient(90deg,#9ad97f,#5fc26d)"></i>
+    </div>
+    <div class="row2">
+      <button class="btn" id="pl-water">浇水</button>
+      <button class="btn" id="pl-fert">施肥</button>
+    </div>
+    <p class="note">浇水每 10 分钟一次，施肥每小时一次；水分和肥料都会加快成长。</p>`);
+  const act = async (path, okMsg) => {
+    const r = await call(path, { id: p.id });
+    if (r.status !== 200) { toast(r.body.message || '还不行'); return; }
+    adopt(r.body.me);
+    toast(okMsg);
+    if (r.body.plant) openPlant(r.body.plant);
+  };
+  bd.querySelector('#pl-water').addEventListener('click', () => act('/api/plant/water', '浇好水了'));
+  bd.querySelector('#pl-fert').addEventListener('click', () => act('/api/plant/fertilize', '施好肥了'));
 }
 
 async function doPlant(x) {
@@ -619,13 +657,37 @@ async function doPlant(x) {
   refresh();
 }
 
-/* 点空地：如果在选位置，就种下去 */
-$('main').addEventListener('click', (e) => {
-  if (!planting) return;
-  if (e.target.closest('button, #pig, #friends, header')) return;
-  if (e.clientY < Scene.groundY() + 20) { toast('要种在地上'); return; }
-  doPlant(clamp(e.clientX / innerWidth, 0.03, 0.97));
+/* 猪圈可以左右拖动；点空地种植物，点植物看生长状态 */
+let camDrag = null, camMoved = false;
+$('main').addEventListener('pointerdown', (e) => {
+  if (e.target.closest('button, #pig, #friends, header, #plant-tip')) return;
+  camDrag = { last: e.clientX, moved: 0 };
+  camMoved = false;
 });
+$('main').addEventListener('pointermove', (e) => {
+  if (!camDrag) return;
+  const dx = e.clientX - camDrag.last;
+  camDrag.last = e.clientX;
+  camDrag.moved += Math.abs(dx);
+  if (camDrag.moved > 6) { camMoved = true; Scene.panBy(-dx); }
+});
+function finishSceneTap(e) {
+  if (!camDrag) return;
+  const wasDrag = camMoved;
+  camDrag = null; camMoved = false;
+  if (wasDrag) return;
+  if (e.target.closest('button, #pig, #friends, header, #plant-tip')) return;
+  if (planting) {
+    if (e.clientY < Scene.groundY() + 20) { toast('要种在地上'); return; }
+    const worldX = Scene.screenToWorld(e.clientX);
+    doPlant(clamp(worldX / Scene.worldW(), 0.03, 0.97));
+    return;
+  }
+  const hit = Scene.hitPlant(e.clientX, e.clientY);
+  if (hit) openPlant(hit);
+}
+$('main').addEventListener('pointerup', finishSceneTap);
+$('main').addEventListener('pointercancel', () => { camDrag = null; camMoved = false; });
 $('plant-cancel').addEventListener('click', () => { planting = null; $('plant-tip').classList.add('hidden'); });
 $('seed-btn').addEventListener('click', openSeeds);
 
@@ -961,9 +1023,68 @@ function enter() {
   $('login').classList.add('hidden');
   $('main').classList.remove('hidden');
   pigS.until = performance.now() + 1500;
+  if (Scene.worldW()) {                     // 猪圈比屏幕宽，开局把镜头对准中间
+    Scene.setCam(Scene.worldW() / 2 - innerWidth / 2);
+    pigS.x = Scene.worldW() / 2;
+  }
   render();
   connect();
   heartbeat();
+  loadWeather();
+}
+
+/* ---------------- 天气（定位 + Open-Meteo） ---------------- */
+function weatherFromCode(c) {
+  if (c == null) return 'clear';
+  if (c === 0 || c === 1) return 'clear';
+  if (c === 2) return 'cloudy';
+  if (c === 3 || c === 45 || c === 48) return 'overcast';
+  if ((c >= 51 && c <= 67) || (c >= 80 && c <= 82) || c >= 95) return 'rain';
+  if ((c >= 71 && c <= 77) || c === 85 || c === 86) return 'snow';
+  return 'clear';
+}
+
+async function geoPos() {
+  if (navigator.geolocation) {
+    const p = await new Promise((res) => {
+      let done = false;
+      const t = setTimeout(() => { if (!done) { done = true; res(null); } }, 5000);
+      navigator.geolocation.getCurrentPosition(
+        (pos) => { if (!done) { done = true; clearTimeout(t); res({ lat: pos.coords.latitude, lon: pos.coords.longitude }); } },
+        () => { if (!done) { done = true; clearTimeout(t); res(null); } },
+        { timeout: 4500, maximumAge: 3600000, enableHighAccuracy: false },
+      );
+    });
+    if (p) return p;
+  }
+  try {                                            // 定位被拒就用 IP 粗略定位
+    const r = await fetch('https://ipapi.co/json/');
+    const j = await r.json();
+    if (j && j.latitude) return { lat: j.latitude, lon: j.longitude };
+  } catch { /* ignore */ }
+  return null;
+}
+
+async function loadWeather() {
+  if (forcedWeather) { Scene.setWeather(forcedWeather); return; }
+  const cached = read('pig.weather');
+  if (cached && Date.now() - cached.at < 30 * 60 * 1000) { Scene.setWeather(cached.w); return; }
+  try {
+    let geo = read('pig.geo');
+    if (!geo || Date.now() - geo.at > 6 * 3600 * 1000) {
+      const p = await geoPos();
+      if (!p) return;
+      geo = { ...p, at: Date.now() };
+      write('pig.geo', geo);
+    }
+    const url = `https://api.open-meteo.com/v1/forecast?latitude=${geo.lat}&longitude=${geo.lon}&current=weather_code`;
+    const r = await fetch(url);
+    const j = await r.json();
+    const code = j && j.current && j.current.weather_code;
+    const w = weatherFromCode(code);
+    write('pig.weather', { at: Date.now(), w });
+    Scene.setWeather(w);
+  } catch { /* 没网就保持晴天 */ }
 }
 
 /* ---------------- 启动 ---------------- */
@@ -988,6 +1109,8 @@ async function boot() {
 
   // 调试 / 截图用：?h=15.5 强制某个时刻，?open=book|todo|stats|profile|station|admin
   const q = new URLSearchParams(location.search);
+  forcedWeather = q.get('w') || '';
+  if (forcedWeather) Scene.setWeather(forcedWeather);
   if (q.get('h') != null) Scene.forceHour(parseFloat(q.get('h')));
   const qc = (q.get('c') || '').toUpperCase();
   const qn = q.get('n') || '';
@@ -1014,6 +1137,7 @@ async function boot() {
   if (ok && open) setTimeout(() => {
     if (open === 'book') openBook(); else if (open === 'todo') openTodo(); else if (open === 'stats') openStats();
     else if (open === 'profile') openProfile(); else if (open === 'station') openStation(); else if (open === 'admin') openAdmin();
+    else if (open === 'seeds') openSeeds();
   }, 400);
   if (qc || qn) history.replaceState(null, '', location.pathname);
 }
