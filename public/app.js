@@ -6,664 +6,139 @@ const BASE = NATIVE ? 'https://150.158.1.111/pig/' : '';
 const api = (p) => BASE + p;
 
 const $ = (id) => document.getElementById(id);
-const clamp = (v, a = 0, b = 1) => Math.min(b, Math.max(a, v));
+const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+const imgOf = (id) => api('img/' + id + '.jpg');
 
-/* ---------------- 状态 ---------------- */
-let S = null;          // 站视图
-let ME = null;         // 我的收集
-let CODE = localStorage.getItem('pig.code') || '';
+const MODES = [[25, 5], [45, 15]];                       // 专注 / 休息
+const RARITY = { common: '常见', rare: '稀有', legend: '传说' };
+const KEY_F = 'pig.focus', KEY_B = 'pig.brk';
+
 let UID = localStorage.getItem('pig.uid') || '';
-let es = null;
-let tickTimer = null;
-let focusOpen = true;   // 全屏专注界面是否展开（收起后不要被 tick 拉回来）
+let CODE = localStorage.getItem('pig.code') || '';
+let ME = null, S = null;
+let es = null, pit = null;
+let planting = null;
+let focusOpen = true;
+let soundOn = localStorage.getItem('pig.sound') !== '0';
+
+/* 服务器时钟偏移：endsAt 是服务器时间，必须换成「我这边的时间」再比较，
+   否则两边时钟差几分钟就会出现「刚点开始就说结束」。 */
+let SRV_SKEW = 0;
+const nowMs = () => Date.now() + SRV_SKEW;
+
+/* 连续专注（自动番茄钟）：默认关，可在「我」里打开 */
+let autoCycle = localStorage.getItem('pig.autocycle') === '1';
+let lastMinutes = parseInt(localStorage.getItem('pig.lastmin') || '25', 10) || 25;
+let focusGen = 0;        // 每开始一次专注 +1，用来丢弃迟到的旧结算
+let focusingNow = false; // 专注时猪会安静一点，陪在旁边
+
+const read = (k) => { try { return JSON.parse(localStorage.getItem(k) || 'null'); } catch { return null; } };
+const write = (k, v) => { if (v) localStorage.setItem(k, JSON.stringify(v)); else localStorage.removeItem(k); };
+
+const fmt = (ms) => {
+  const s = Math.max(0, Math.ceil(ms / 1000));
+  return `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
+};
+const hhmm = (ts) => { const d = new Date(ts); return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; };
 
 /* ---------------- 网络 ---------------- */
-async function call(path, opts = {}) {
-  const res = await fetch(api(path), {
-    ...opts,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(UID ? { 'X-Pig-Uid': UID } : {}),
-      ...(opts.headers || {}),
-    },
-  });
-  const text = await res.text();
-  let body;
-  try { body = JSON.parse(text); } catch { body = { raw: text }; }
-  if (res.ok && body.uid) { UID = body.uid; localStorage.setItem('pig.uid', UID); }
-  if (res.ok && body.code) { CODE = body.code; localStorage.setItem('pig.code', CODE); }
-  return { status: res.status, body };
+async function call(p, body, method = 'POST') {
+  let res;
+  try {
+    res = await fetch(api(p), {
+      method,
+      headers: { 'Content-Type': 'application/json', ...(UID ? { 'X-Pig-Uid': UID } : {}) },
+      body: method === 'GET' ? undefined : JSON.stringify(body || {}),
+    });
+  } catch {
+    return { status: 0, body: { error: 'network', message: '连不上服务器，看看网络' } };
+  }
+  let data;
+  try { data = await res.json(); } catch { data = { error: 'bad', message: '服务器没正常回话' }; }
+  const sn = data && (data.now || (data.me && data.me.now));
+  if (sn) SRV_SKEW = sn - Date.now();
+  if (res.status === 401 && p !== '/api/login' && p !== '/api/me') logout();
+  return { status: res.status, body: data };
 }
+
+function adopt(me) { if (me) ME = me; }
 
 async function refresh() {
-  if (!CODE) return;
-  const { status, body } = await call(`api/state?code=${encodeURIComponent(CODE)}`);
-  if (status !== 200) {
-    if (status === 404) { localStorage.removeItem('pig.code'); CODE = ''; showJoin('站码失效了，重新进一次'); }
-    return;
-  }
-  S = body;
-  ME = body.me;
+  if (!UID) return;
+  const r = await call('/api/state', null, 'GET');
+  if (r.status !== 200) { if (r.status === 401 || r.status === 404) logout(); return; }
+  S = r.body; ME = S.me;
   render();
 }
 
-/* ---------------- 天空 ---------------- */
-const cv = $('sky');
-const ctx = cv.getContext('2d');
-let W = 0, H = 0, DPR = Math.min(devicePixelRatio || 1, 2);
-
-function resize() {
-  W = innerWidth; H = innerHeight;
-  cv.width = Math.round(W * DPR);
-  cv.height = Math.round(H * DPR);
-  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
-  drawSky();
-}
-
-function phaseOf(h) {
-  if (h < 4.5) return 'night';
-  if (h < 7.5) return 'dawn';
-  if (h < 17) return 'day';
-  if (h < 20) return 'dusk';
-  return 'night';
-}
-function lightOf(h) {
-  if (h >= 4.5 && h <= 7.5) return 0.06 + ((h - 4.5) / 3) * 0.94;
-  if (h > 7.5 && h < 17) return 1;
-  if (h >= 17 && h <= 20) return 1 - ((h - 17) / 3) * 0.94;
-  return 0.06;
-}
-
-const SKY = {
-  night: [[7, 9, 15], [11, 15, 25], [19, 25, 37]],
-  dawn: [[24, 22, 34], [82, 60, 60], [164, 110, 76]],
-  day: [[82, 86, 84], [138, 136, 124], [198, 190, 170]],
-  dusk: [[28, 24, 34], [92, 58, 54], [176, 104, 62]],
-};
-
-let FORCE_H = null;
-function drawSky() {
-  const now = new Date();
-  const h = FORCE_H != null ? FORCE_H : now.getHours() + now.getMinutes() / 60;
-  const phase = phaseOf(h);
-  const light = lightOf(h);
-  const cols = SKY[phase];
-  const k = 0.55 + light * 0.45;
-  const gy = H * 0.58;
-
-  const g = ctx.createLinearGradient(0, 0, 0, gy);
-  g.addColorStop(0, `rgb(${cols[0].map((c) => Math.round(c * k)).join(',')})`);
-  g.addColorStop(0.55, `rgb(${cols[1].map((c) => Math.round(c * k)).join(',')})`);
-  g.addColorStop(1, `rgb(${cols[2].map((c) => Math.round(c * k)).join(',')})`);
-  ctx.fillStyle = g;
-  ctx.fillRect(0, 0, W, gy);
-
-  // 星
-  if (light < 0.5) {
-    const a = (1 - light * 2) * 0.7;
-    ctx.save();
-    for (let i = 0; i < 70; i++) {
-      const x = ((i * 97.31) % 1) * W;
-      const y = ((i * 41.77) % 1) * gy * 0.85;
-      const s = ((i * 13.7) % 1) * 1.2 + 0.3;
-      ctx.fillStyle = `rgba(207,214,220,${a * (0.3 + ((i * 7.3) % 1) * 0.7)})`;
-      ctx.fillRect(x, y, s, s);
-    }
-    ctx.restore();
-  }
-
-  // 日月
-  const t = clamp((h - 4.5) / 15, 0, 1);
-  const isDay = h >= 4.5 && h <= 20;
-  if (isDay && light > 0.12) {
-    const x = W * (0.08 + 0.84 * t);
-    const y = gy - Math.sin(Math.PI * t) * H * 0.42;
-    const r = Math.min(W, H) * 0.016;
-    ctx.save();
-    ctx.globalCompositeOperation = 'lighter';
-    const sg = ctx.createRadialGradient(x, y, 0, x, y, r * 14);
-    sg.addColorStop(0, `rgba(255,224,176,${0.30 * light})`);
-    sg.addColorStop(0.22, `rgba(255,206,150,${0.13 * light})`);
-    sg.addColorStop(1, 'rgba(255,190,130,0)');
-    ctx.fillStyle = sg;
-    ctx.beginPath(); ctx.arc(x, y, r * 14, 0, 6.2832); ctx.fill();
-    const dg = ctx.createRadialGradient(x, y, 0, x, y, r * 1.6);
-    dg.addColorStop(0, `rgba(255,250,238,${0.42 + light * 0.2})`);
-    dg.addColorStop(0.75, `rgba(255,240,214,${0.2 + light * 0.1})`);
-    dg.addColorStop(1, 'rgba(255,236,200,0)');
-    ctx.fillStyle = dg;
-    ctx.beginPath(); ctx.arc(x, y, r * 1.6, 0, 6.2832); ctx.fill();
-    ctx.restore();
-  } else {
-    const mt = ((h + 12) % 24) / 24;
-    const x = W * (0.12 + 0.76 * mt);
-    const y = gy - Math.sin(Math.PI * mt) * H * 0.36;
-    if (y < gy - 8) {
-      const r = Math.min(W, H) * 0.02;
-      ctx.fillStyle = 'rgba(226,238,248,.6)';
-      ctx.beginPath(); ctx.arc(x, y, r, 0, 6.2832); ctx.fill();
-      ctx.fillStyle = `rgba(${cols[0].join(',')},.85)`;
-      ctx.beginPath(); ctx.arc(x - r * 0.42, y - r * 0.28, r * 0.86, 0, 6.2832); ctx.fill();
-    }
-  }
-
-  // 山
-  const layers = [
-    { y: gy - 120, amp: 26, col: `rgba(26,34,42,${0.72})`, f: 0.0018, ph: 0.7, rim: 0.09 },
-    { y: gy - 74, amp: 20, col: `rgba(16,21,27,${0.92})`, f: 0.0028, ph: 2.1, rim: 0.06 },
-    { y: gy - 30, amp: 13, col: 'rgba(9,12,16,1)', f: 0.0044, ph: 4.3, rim: 0.03 },
-  ];
-  for (const L of layers) {
-    const pts = [];
-    for (let x = -20; x <= W + 20; x += 10) {
-      pts.push([x, L.y + Math.sin(x * L.f + L.ph) * L.amp
-        + Math.sin(x * L.f * 2.7 + L.ph * 3) * L.amp * 0.32
-        + Math.sin(x * L.f * 0.4 + 1.7) * L.amp * 0.5]);
-    }
-    ctx.fillStyle = L.col;
-    ctx.beginPath();
-    ctx.moveTo(-20, H); ctx.lineTo(-20, pts[0][1]);
-    for (const [x, y] of pts) ctx.lineTo(x, y);
-    ctx.lineTo(W + 20, H); ctx.closePath(); ctx.fill();
-    ctx.strokeStyle = `rgba(178,206,214,${L.rim * (0.4 + light * 0.6)})`;
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(pts[0][0], pts[0][1]);
-    for (const [x, y] of pts) ctx.lineTo(x, y);
-    ctx.stroke();
-  }
-
-  // 地面
-  const gg = ctx.createLinearGradient(0, gy - 10, 0, H);
-  gg.addColorStop(0, `rgb(${Math.round(14 + light * 8)},${Math.round(18 + light * 8)},${Math.round(24 + light * 6)})`);
-  gg.addColorStop(0.45, 'rgba(9,12,17,1)');
-  gg.addColorStop(1, 'rgba(5,7,10,1)');
-  ctx.fillStyle = gg;
-  ctx.fillRect(0, gy - 10, W, H - gy + 10);
-
-  // 地面等高线，越近越疏
-  ctx.save();
-  for (let i = 0; i < 10; i++) {
-    const t = i / 10;
-    const yy = gy + Math.pow(t, 1.8) * (H - gy);
-    const a = (0.045 - t * 0.035) * (0.4 + light * 0.6);
-    if (a <= 0.002) continue;
-    ctx.strokeStyle = `rgba(160,185,200,${a})`;
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    for (let x = 0; x <= W; x += 16) {
-      const dy = Math.sin(x * 0.006 + i * 1.7) * (2 + t * 9) + Math.sin(x * 0.0013 + i) * (3 + t * 12);
-      if (x === 0) ctx.moveTo(x, yy + dy); else ctx.lineTo(x, yy + dy);
-    }
-    ctx.stroke();
-  }
-  ctx.restore();
-
-  // 暗角
-  const vg = ctx.createRadialGradient(W / 2, H * 0.45, Math.min(W, H) * 0.28, W / 2, H * 0.5, Math.max(W, H) * 0.78);
-  vg.addColorStop(0, 'rgba(0,0,0,0)');
-  vg.addColorStop(1, 'rgba(0,0,0,.5)');
-  ctx.fillStyle = vg;
-  ctx.fillRect(0, 0, W, H);
-
-  // 地平线雾
-  const hz = ctx.createLinearGradient(0, gy - 90, 0, gy + 8);
-  hz.addColorStop(0, 'rgba(150,175,190,0)');
-  hz.addColorStop(0.7, `rgba(150,175,190,${0.04 + light * 0.05})`);
-  hz.addColorStop(1, 'rgba(150,175,190,0)');
-  ctx.fillStyle = hz;
-  ctx.fillRect(0, gy - 90, W, 100);
-}
-
-/* ---------------- 渲染 ---------------- */
-function render() {
-  if (!S) return;
-  const now = new Date();
-  $('h-clock').textContent =
-    `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')} · ${weatherLine()}`;
-
-  const me = S.members.find((m) => m.uid === UID);
-  $('h-streak').textContent = (me && me.streak) || 0;
-
-  // 朋友条
-  const fr = $('friends');
-  fr.innerHTML = S.members.map((m) => {
-    const p = m.presence || {};
-    const isMe = m.uid === UID;
-    let cls = 'fr';
-    let right = '';
-    if (p.state === 'focusing' && p.endsAt > Date.now()) {
-      cls += ' focus';
-      right = `<b data-ends="${p.endsAt}">--:--</b>`;
-    } else if (!m.cameToday) {
-      right = '<span style="opacity:.45">今天还没来</span>';
-    } else if (isMe) {
-      cls += ' me';
-      right = '<span style="opacity:.45">我</span>';
-    }
-    return `<div class="${cls}"><i></i>${esc(m.name)}${right}</div>`;
-  }).join('');
-
-  // 猪
-  const mine = Object.entries((ME && ME.cards) || {})
-    .map(([id, c]) => ({ id: +id, ...c }))
-    .sort((a, b) => (b.ex - a.ex) || (b.lastAt - a.lastAt))
-    .slice(0, 6);
-
-  const sig = mine.map((c) => c.id + ':' + c.ex).join('|');
-  if (sig !== pigsSig) {
-    pigsSig = sig;
-    $('pigs').innerHTML = mine.map((c, i) => {
-      const name = c.title || ('#' + c.id);
-      const tx = pigOffsets.get(c.id) || 0;
-      const dur = (3.2 + (i % 3) * 0.55).toFixed(1);
-      const delay = (i * 0.43).toFixed(2);
-      return `<div class="pig" data-id="${c.id}"
-        style="--bob:${dur}s;--bd:${delay}s;--tx:${tx}px;--r1:${(i % 2 ? 1.4 : -1.4)}deg;--r2:${(i % 2 ? -1.4 : 1.4)}deg">
-        <div class="ph"><img src="${api('img/' + c.id + '.jpg')}" alt="" loading="lazy">
-        ${c.ex > 0 ? `<span class="ex">EX${c.ex}</span>` : ''}
-        <span class="zz">z</span></div>
-        <div class="nm">${esc(name)}</div>
-      </div>`;
-    }).join('');
-    applySleep();
-  }
-  $('empty-hint').classList.toggle('hidden', mine.length > 0);
-
-  // 底部
-  const drawnToday = me && me.cameToday;
-  const tickets = (ME && ME.tickets) || 0;
-  const bd = $('b-draw');
-  bd.classList.toggle('done', drawnToday && tickets <= 0);
-  $('d-sub').textContent = drawnToday ? (tickets > 0 ? `${tickets} 张券` : '明天再来') : '今天免费';
-  $('k-sub').textContent = `${S.collected}/${S.total}`;
-  $('b-book').querySelector('i').textContent = `${S.collected}/${S.total}`;
-
-  updateFocusUI();
-}
-
-function weatherLine() {
-  const h = new Date().getHours();
-  const p = phaseOf(h);
-  return { night: '夜', dawn: '黎明', day: '白天', dusk: '黄昏' }[p];
-}
-
-function esc(s) {
-  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => (
-    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-}
-
-/* ---------------- 让猪活着 ---------------- */
-let pigsSig = '';
-const pigOffsets = new Map();
-let wanderTimer = null;
-
-function applySleep() {
-  const h = new Date().getHours();
-  const night = h >= 22 || h < 6;
-  document.querySelectorAll('.pig').forEach((el) => el.classList.toggle('sleep', night));
-}
-
-function startWander() {
-  clearInterval(wanderTimer);
-  wanderTimer = setInterval(() => {
-    if (document.hidden) return;
-    const els = [...document.querySelectorAll('.pig')];
-    if (!els.length) return;
-    const f = focusState();
-    const calm = f && f.endsAt > Date.now();
-    // 你在专注的时候，它们安静下来陪着你
-    if (calm && Math.random() < 0.75) return;
-    const el = els[Math.floor(Math.random() * els.length)];
-    const id = +el.dataset.id;
-    const cur = pigOffsets.get(id) || 0;
-    let next = cur + (Math.random() * 46 - 23);
-    next = Math.max(-27, Math.min(27, next));
-    if (Math.abs(next - cur) < 7) return;
-    pigOffsets.set(id, next);
-    el.style.setProperty('--tx', next.toFixed(1) + 'px');
-  }, 3200);
-}
-
-function hop(el) {
-  el.classList.remove('hop');
-  void el.offsetWidth;          // 强制重排，让动画能重复触发
-  el.classList.add('hop');
-  setTimeout(() => el.classList.remove('hop'), 620);
-
-  const h = document.createElement('span');
-  h.className = 'heart';
-  h.textContent = '♥';
-  el.appendChild(h);
-  setTimeout(() => h.remove(), 1000);
-}
-
-/* ---------------- 专注计时 ---------------- */
-function focusState() {
-  try { return JSON.parse(localStorage.getItem('pig.focus') || 'null'); }
-  catch { return null; }
-}
-function saveFocus(f) {
-  if (f) localStorage.setItem('pig.focus', JSON.stringify(f));
-  else localStorage.removeItem('pig.focus');
-}
-
-function updateFocusUI() {
-  const f = focusState();
-  const btn = $('b-focus');
-  const sub = $('f-sub');
-  if (f && f.endsAt > Date.now()) {
-    const left = Math.max(0, f.endsAt - Date.now());
-    const m = Math.floor(left / 60000);
-    const s = Math.floor((left % 60000) / 1000);
-    const txt = `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
-    btn.classList.add('live');
-    btn.firstChild.textContent = txt;
-    sub.textContent = '进行中';
-    $('f-time').textContent = txt;
-    $('focus').classList.toggle('hidden', !focusOpen);
-  } else {
-    btn.classList.remove('live');
-    btn.firstChild.textContent = '专注';
-    sub.textContent = '+1 券';
-    $('focus').classList.add('hidden');
-    if (f) settleFocus();   // 到点了但还没结算
-  }
-
-  // 朋友条上的倒计时
-  document.querySelectorAll('[data-ends]').forEach((el) => {
-    const left = Math.max(0, (+el.dataset.ends) - Date.now());
-    const m = Math.floor(left / 60000);
-    const s = Math.floor((left % 60000) / 1000);
-    el.textContent = `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
-  });
-}
-
-async function startFocus(minutes) {
-  const { status, body } = await call('api/focus/start', {
-    method: 'POST', body: JSON.stringify({ minutes }),
-  });
-  if (status !== 200) { toast('开始失败'); return; }
-  saveFocus({ id: body.focus.id, start: body.focus.start, endsAt: body.focus.endsAt, minutes });
-  scheduleNotify(body.focus.endsAt, minutes);
-  focusOpen = true;
-  updateFocusUI();
-  toast(`${minutes} 分钟，开始`);
-}
-
-let settling = false;
-async function settleFocus() {
-  if (settling) return;
-  const f = focusState();
-  if (!f) return;
-  settling = true;
-  try {
-    const { body } = await call('api/focus/end', { method: 'POST', body: JSON.stringify({}) });
-    saveFocus(null);
-    cancelNotify();
-    focusOpen = true;
-    if (body.settled) {
-      toast(`完成 · 券 +${body.granted}${body.capped ? '（已满 5 张）' : ''}`);
-      refresh();
-    } else {
-      toast('这次没有结算');
-    }
-  } catch { /* 网络失败就留着，下次再试 */ }
-  settling = false;
-}
-
-/* 本地通知：让系统在到点时叫醒你，不依赖 JS */
-async function scheduleNotify(endsAt, minutes) {
-  const C = window.Capacitor;
-  const LN = C && C.Plugins && C.Plugins.LocalNotifications;
-  if (!LN) return;
-  try {
-    let perm = await LN.checkPermissions();
-    if (perm.display !== 'granted') perm = await LN.requestPermissions();
-    if (perm.display !== 'granted') return;
-    await LN.cancel({ notifications: [{ id: 1001 }] }).catch(() => {});
-    await LN.schedule({
-      notifications: [{
-        id: 1001,
-        title: '专注结束',
-        body: `${minutes} 分钟到了，回去看看你的猪。`,
-        scheduleAt: new Date(endsAt),
-      }],
-    });
-  } catch (e) { console.warn('通知失败', e); }
-}
-async function cancelNotify() {
-  const C = window.Capacitor;
-  const LN = C && C.Plugins && C.Plugins.LocalNotifications;
-  if (!LN) return;
-  try { await LN.cancel({ notifications: [{ id: 1001 }] }); } catch { /* ignore */ }
-}
-
-/* ---------------- 抽卡 ---------------- */
-let drawing = false;
-async function doDraw() {
-  if (drawing) return;
-  drawing = true;
-  const ov = $('draw');
-  const card = $('card');
-  card.classList.remove('flip', 'rare', 'legend');
-  $('c-img').removeAttribute('src');
-  $('d-hint').textContent = '抽…';
-  ov.classList.remove('hidden');
-
-  const { status, body } = await call('api/draw', { method: 'POST', body: '{}' });
-  if (status !== 200) {
-    ov.classList.add('hidden');
-    drawing = false;
-    toast(body.message || '抽不了');
-    if (status === 402) refresh();
-    return;
-  }
-
-  const c = body.card;
-  $('c-img').src = api(`img/${c.id}.jpg`);
-  $('c-name').textContent = c.title;
-  const rn = { common: '常见', rare: '稀有', legend: '传说' }[c.rarity];
-  $('c-tag').textContent = body.isNew ? `${rn} · 新的` : `${rn} · 第 ${c.count} 次`;
-  if (c.rarity !== 'common') card.classList.add(c.rarity);
-
-  setTimeout(() => {
-    card.classList.add('flip');
-    $('d-hint').textContent = body.free ? '今天免费的一抽' : '用掉 1 张券';
-    if (c.rarity === 'legend' && navigator.vibrate) navigator.vibrate([30, 60, 120]);
-    else if (c.rarity === 'rare' && navigator.vibrate) navigator.vibrate(30);
-  }, 420);
-
-  S = body.state;
-  ME = S.me;
-  render();
-  drawing = false;
-}
-
-/* ---------------- 图鉴 ---------------- */
-let bookLimit = 60;
-function openBook() {
-  bookLimit = 60;
-  renderBook();
-  $('book').classList.remove('hidden');
-}
-function renderBook() {
-  const cards = (ME && ME.cards) || {};
-  const unlocked = Object.keys(cards).map(Number)
-    .sort((a, b) => (cards[b].ex - cards[a].ex) || (cards[b].lastAt - cards[a].lastAt));
-  const have = unlocked.length;
-  $('k-have').textContent = have;
-  $('k-total').textContent = '/' + S.total;
-
-  const cells = unlocked.slice(0, bookLimit).map((id) => `
-    <div class="bk" data-id="${id}"><img src="${api('img/' + id + '.jpg')}" loading="lazy" alt="">
-    ${cards[id].ex > 0 ? `<span class="bex">EX${cards[id].ex}</span>` : ''}</div>`).join('');
-
-  const lockCount = Math.max(0, bookLimit - have);
-  const locks = Array.from({ length: lockCount }, () => '<div class="bk lock">·</div>').join('');
-
-  $('book-grid').innerHTML = cells + locks;
-  $('k-more').style.display = bookLimit >= S.total ? 'none' : '';
-}
-
-/* ---------------- 界面切换 ---------------- */
-function showJoin(err) {
+function logout() {
+  UID = ''; CODE = ''; ME = null; S = null;
+  localStorage.removeItem('pig.uid'); localStorage.removeItem('pig.code');
+  if (es) { try { es.close(); } catch { /* ignore */ } es = null; }
   $('main').classList.add('hidden');
-  $('join').classList.remove('hidden');
-  if (err) $('j-err').textContent = err;
+  $('login').classList.remove('hidden');
 }
 
-function showMain() {
-  $('join').classList.add('hidden');
-  $('main').classList.remove('hidden');
-  render();
-}
-
-/* ---------------- 事件 ---------------- */
-$('j-go').addEventListener('click', async () => {
-  const name = $('j-name').value.trim();
-  const code = $('j-code').value.trim().toUpperCase();
-  if (!name) { $('j-err').textContent = '先填个名字'; return; }
-  $('j-err').textContent = '';
-  const { status, body } = await call('api/join', {
-    method: 'POST', body: JSON.stringify({ name, code }),
-  });
-  if (status !== 200) { $('j-err').textContent = body.message || '进不去'; return; }
-  CODE = body.code; localStorage.setItem('pig.code', CODE);
-  UID = body.uid; localStorage.setItem('pig.uid', UID);
-  S = body.state; ME = S.me;
-  showMain();
-  connect();
-  heartbeat();
-});
-
-$('b-draw').addEventListener('click', doDraw);
-
-$('b-focus').addEventListener('click', () => {
-  const f = focusState();
-  if (f && f.endsAt > Date.now()) { focusOpen = true; $('focus').classList.remove('hidden'); return; }
-  openFocusPicker();
-});
-
-function openFocusPicker() {
-  const ov = document.createElement('div');
-  ov.className = 'overlay';
-  ov.innerHTML = `<div class="focus-box">
-    <div class="f-label">专注多久</div>
-    <div class="f-actions" style="margin-top:30px">
-      <button class="ghost" data-m="25">25 分钟<br><span style="font-size:8px;opacity:.6">+1 券</span></button>
-      <button class="ghost" data-m="45">45 分钟<br><span style="font-size:8px;opacity:.6">+2 券</span></button>
-    </div>
-    <div style="margin-top:26px"><button class="ghost" data-x>算了</button></div>
-  </div>`;
-  ov.addEventListener('click', (e) => {
-    const m = e.target.closest('[data-m]');
-    if (m) { ov.remove(); startFocus(+m.dataset.m); return; }
-    if (e.target.closest('[data-x]') || e.target === ov) ov.remove();
-  });
-  document.body.appendChild(ov);
-}
-
-$('f-min').addEventListener('click', () => {
-  focusOpen = false;
-  $('focus').classList.add('hidden');
-});
-let stopArmed = false;
-let stopTimer = null;
-$('f-stop').addEventListener('click', async () => {
-  const btn = $('f-stop');
-
-  // 不用原生 confirm：某些 WebView 会静默吞掉，点了像没反应
-  if (!stopArmed) {
-    stopArmed = true;
-    btn.textContent = '再点一次';
-    clearTimeout(stopTimer);
-    stopTimer = setTimeout(() => { stopArmed = false; btn.textContent = '放弃'; }, 2600);
-    return;
+/* ---------------- 声音 ---------------- */
+/* 现场合成一声「哼」：锯齿波下滑 + 低通 + 轻微颤音。
+   不依赖任何音频文件，因此没有版权问题，也不会因为缺 oink.ogg 而静音。 */
+let actx = null;
+function audioCtx() {
+  if (!actx) {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return null;
+    try { actx = new AC(); } catch { return null; }
   }
-  stopArmed = false;
-  clearTimeout(stopTimer);
-  btn.textContent = '放弃';
+  if (actx.state === 'suspended') actx.resume().catch(() => {});
+  return actx;
+}
 
-  // 先本地收尾，网络失败也不至于卡在界面里
-  saveFocus(null);
-  cancelNotify();
-  focusOpen = false;
-  $('focus').classList.add('hidden');
-  updateFocusUI();
-  toast('已放弃');
-
+function playOink(rate = 1) {
+  if (!soundOn || !(ME && ME.flags.sound !== false)) return;
+  const ctx = audioCtx();
+  if (!ctx) return;
   try {
-    await call('api/focus/end', { method: 'POST', body: JSON.stringify({ abandon: true }) });
-  } catch (e) { console.warn('放弃上报失败', e); }
-  refresh();
-});
+    const r = Math.min(1.9, Math.max(0.55, rate));
+    const dur = 0.26 / r;
+    const t = ctx.currentTime;
+    const base = 150 + 90 * r;
 
-$('b-book').addEventListener('click', openBook);
-$('k-more').addEventListener('click', () => { bookLimit += 60; renderBook(); });
+    const osc = ctx.createOscillator();
+    const lp = ctx.createBiquadFilter();
+    const gain = ctx.createGain();
+    const lfo = ctx.createOscillator();
+    const lfoGain = ctx.createGain();
 
-$('b-station').addEventListener('click', () => {
-  $('s-code').textContent = S.code;
-  $('s-members').innerHTML = S.members.map((m) => {
-    const p = m.presence || {};
-    const cls = p.state === 'focusing' ? 'sm focus' : (m.cameToday ? 'sm on' : 'sm');
-    return `<div class="${cls}"><i></i><b>${esc(m.name)}</b><em>${m.count} 只</em></div>`;
-  }).join('');
-  $('station').classList.remove('hidden');
-});
+    lp.type = 'lowpass';
+    lp.frequency.value = 900 + 400 * r;
+    osc.type = 'sawtooth';
+    osc.frequency.setValueAtTime(base * 1.35, t);
+    osc.frequency.exponentialRampToValueAtTime(base * 0.7, t + dur);
 
-$('s-copy').addEventListener('click', async () => {
-  try { await navigator.clipboard.writeText(S.code); toast('站码已复制'); }
-  catch { toast(S.code); }
-});
+    lfo.frequency.value = 24 + 8 * r;
+    lfoGain.gain.value = 22;
+    lfo.connect(lfoGain).connect(osc.frequency);
 
-document.addEventListener('click', (e) => {
-  if (e.target.closest('[data-close]')) {
-    e.target.closest('.overlay')?.classList.add('hidden');
-  }
-  const ms = e.target.closest('#mascot');
-  if (ms) { hop(ms); return; }
+    gain.gain.setValueAtTime(0.0001, t);
+    gain.gain.exponentialRampToValueAtTime(0.28, t + 0.018);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t + dur);
 
-  const pig = e.target.closest('.pig');
-  if (pig) {
-    hop(pig);
-    const id = +pig.dataset.id;
-    setTimeout(() => openViewer(id), 430);
-  }
-  const bk = e.target.closest('.bk:not(.lock)');
-  if (bk) openViewer(+bk.dataset.id);
-});
-
-function openViewer(id) {
-  const c = (ME.cards || {})[id];
-  if (!c) return;
-  $('v-img').src = api(`img/${id}.jpg`);
-  $('v-name').textContent = c.title || ('#' + id);
-  $('v-sub').textContent = `抽到 ${c.count} 次 · EX ${c.ex}`;
-  $('viewer').classList.remove('hidden');
+    osc.connect(lp).connect(gain).connect(ctx.destination);
+    osc.start(t); lfo.start(t);
+    osc.stop(t + dur + 0.03); lfo.stop(t + dur + 0.03);
+  } catch { /* 没有音频能力就安静 */ }
 }
+document.addEventListener('pointerdown', () => { audioCtx(); playOink(1.6); }, { once: true });
 
-$('draw').addEventListener('click', () => {
-  if (!$('card').classList.contains('flip')) return;
-  $('draw').classList.add('hidden');
-  refresh();
-});
-
-/* ---------------- 实时 ---------------- */
-function connect() {
-  if (es) { try { es.close(); } catch {} }
-  if (!CODE) return;
-  es = new EventSource(api(`api/stream?code=${encodeURIComponent(CODE)}`));
-  es.addEventListener('message', (e) => {
-    try {
-      const m = JSON.parse(e.data);
-      if (m.type === 'feed') pushFeed(m.text);
-      if (m.type === 'presence') refresh();
-    } catch {}
-  });
-  es.onerror = () => { /* 浏览器会自动重连 */ };
+/* ---------------- 提示 ---------------- */
+function toast(msg, ms = 2400) {
+  const t = $('toast');
+  t.textContent = msg;
+  t.classList.add('on');
+  clearTimeout(t._t);
+  t._t = setTimeout(() => t.classList.remove('on'), ms);
 }
-
 function pushFeed(text) {
   const el = document.createElement('div');
   el.className = 'fd';
@@ -673,101 +148,817 @@ function pushFeed(text) {
   while ($('feed').children.length > 3) $('feed').firstChild.remove();
 }
 
+/* ---------------- 面板 ---------------- */
+function openSheet(title, html) {
+  $('sheet-title').textContent = title;
+  $('sheet-bd').innerHTML = html;
+  $('sheet-bd').scrollTop = 0;
+  $('sheet-ov').classList.remove('hidden');
+  return $('sheet-bd');
+}
+const closeSheet = () => $('sheet-ov').classList.add('hidden');
+
+/* ---------------- 渲染 ---------------- */
+function avatarOf(m) { return m.avatar ? imgOf(m.avatar) : BASE + 'assets/pig.gif'; }
+
+function render() {
+  if (!ME || !S) return;
+  $('h-streak').textContent = ME.streak || 0;
+  $('h-avatar-img').src = avatarOf(ME);
+
+  // 朋友
+  $('friends').innerHTML = S.members.map((m) => {
+    const p = m.presence || { state: 'off' };
+    let cls = 'fr', right = '';
+    if (p.state === 'focusing') { cls += ' focus'; right = `<b data-ends="${p.endsAt}">${fmt(p.endsAt - nowMs())}</b>`; }
+    else if (p.state === 'breaking') { cls += ' brk'; right = `<b data-ends="${p.endsAt}">${fmt(p.endsAt - nowMs())}</b>`; }
+    else if (p.state === 'idle') cls += ' on';
+    else { cls += ' off'; right = `<small>${m.cameToday ? '不在线' : '今天还没来'}</small>`; }
+    return `<button class="${cls}" data-uid="${m.uid}" data-name="${esc(m.name)}"><img src="${avatarOf(m)}" alt="">${esc(m.name)}${right}</button>`;
+  }).join('');
+
+  // 植物：自己的 + 站里别人的
+  const others = (S.gardens || []).filter((g) => g.uid !== ME.uid).flatMap((g) => g.plants);
+  Scene.setPlants(ME.plants || [], others);
+
+  // 种子
+  const seeds = (ME.seeds || []).length;
+  $('seed-btn').classList.toggle('hidden', seeds === 0);
+  $('seed-n').textContent = seeds;
+
+  // 底部
+  $('d-sub').textContent = ME.cameToday ? (ME.tickets > 0 ? `${ME.tickets} 张券` : '明天再来') : '今天免费';
+  $('b-draw').classList.toggle('done', ME.cameToday && ME.tickets <= 0);
+  const openTodos = (ME.todos || []).filter((t) => !t.done).length;
+  $('t-sub').textContent = `${openTodos} 条`;
+  $('k-sub').textContent = `${Object.keys(ME.cards || {}).length} / ${S.total}`;
+
+  timers();
+}
+
+/* 朋友条上的倒计时 */
+function tickCountdowns() {
+  document.querySelectorAll('#friends [data-ends]').forEach((el) => { el.textContent = fmt(+el.dataset.ends - nowMs()); });
+}
+
+/* ---------------- 专注 / 休息 ---------------- */
+let settling = false;
+
+async function startFocus(minutes) {
+  const brk = (MODES.find(([f]) => f === minutes) || [minutes, 5])[1];
+  lastMinutes = minutes;
+  localStorage.setItem('pig.lastmin', String(minutes));
+  const r = await call('/api/focus/start', { minutes });
+  // 服务器已经有进行中的专注（换设备 / 清了缓存）：把它接过来，而不是干瞪眼
+  if (r.status === 409) {
+    const m = await call('/api/me', null, 'GET');
+    const live = m.status === 200 && m.body.focus;
+    if (live && live.endsAt > nowMs()) {
+      ME = m.body;
+      const pair = MODES.find(([x]) => x === live.minutes) || [live.minutes, 5];
+      focusGen++;
+      write(KEY_F, { id: live.id, start: live.start, endsAt: live.endsAt, minutes: live.minutes, break: pair[1] });
+      focusOpen = true;
+      $('focus').classList.remove('hidden');
+      $('f-note').textContent = '这边也接上了，一起专注。';
+      updateTomato();
+      scheduleNotify(1001, live.endsAt, '专注结束', `${live.minutes} 分钟到了，回去看看你的猪。`);
+      timers();
+      toast('你已经在专注了，帮你接上', 2200);
+      return;
+    }
+  }
+  if (r.status !== 200) { toast(r.body.message || '开始失败'); return; }
+  const f = r.body.focus;
+  // 服务器没有真的给出一个「未来的结束时间」→ 不要当成已结束，先把状态拉回来
+  if (!f || !(f.endsAt > nowMs() + 3000)) {
+    const m = await call('/api/me', null, 'GET');
+    if (m.status === 200) { ME = m.body; render(); }
+    toast('时间没对上，刷新后再试一次', 2600);
+    return;
+  }
+  focusGen++;
+  write(KEY_F, { id: f.id, start: f.start, endsAt: f.endsAt, minutes, break: brk });
+  if (r.body.resumed) toast('接着刚才那次继续');
+  focusOpen = true;
+  $('focus').classList.remove('hidden');
+  $('f-note').textContent = '放下手机。猪在替你看着。';
+  updateTomato();
+  scheduleNotify(1001, f.endsAt, '专注结束', `${minutes} 分钟到了，回去看看你的猪。`);
+  timers();
+}
+
+function updateTomato() {
+  const el = $('f-tomato');
+  if (!el) return;
+  const done = (ME && ME.todayFocus && ME.todayFocus.count) || 0;
+  el.textContent = `今日第 ${done + 1} 个 · ${lastMinutes} 分钟专注`;
+}
+
+let lastSettleTry = 0;
+async function settleFocus(force = false) {
+  if (settling) return;
+  const f = read(KEY_F);
+  if (!f) return;
+  if (!force && nowMs() < f.endsAt) return;            // 没到点绝不结算
+  if (!force && Date.now() - lastSettleTry < 5000) return;
+  lastSettleTry = Date.now();
+  const gen = focusGen;
+  settling = true;
+  try {
+    const r = await call('/api/focus/end', {});
+    if (r.status !== 200) return;                 // 网络没通：留着，下次再结算
+    if (gen !== focusGen) return;                 // 期间已经开始了新的一次，丢掉这次旧结算
+    write(KEY_F, null);
+    cancelNotify(1001);
+    focusOpen = false;
+    $('focus').classList.add('hidden');
+    if (r.body.settled) {
+      adopt(r.body.me);
+      const seed = r.body.seed;
+      toast(`专注完成！券 +${r.body.granted}${seed ? `，得到一颗${seed.name}种子` : ''}`, 4200);
+      playOink(1.3);
+      pushFeed(`完成了一次 ${f.minutes} 分钟`);
+      await startBreak(f.break || 5);
+      await refresh();
+    } else if (r.body.status === 'aborted') {
+      adopt(r.body.me);
+    }
+  } finally {
+    settling = false;
+    timers();
+  }
+}
+
+async function startBreak(minutes) {
+  const r = await call('/api/break/start', { minutes });
+  const endsAt = r.status === 200 && r.body.brk ? r.body.brk.endsAt : nowMs() + minutes * 60 * 1000;
+  write(KEY_B, { endsAt, minutes });
+  scheduleNotify(1002, endsAt, '休息结束', '起来动一动，回来接着专注。');
+  toast(`休息 ${minutes} 分钟`, 2000);
+}
+
+async function endBreak(auto = false) {
+  const b = read(KEY_B);
+  if (!b) return;
+  write(KEY_B, null);
+  cancelNotify(1002);
+  await call('/api/break/end', {});
+  timers();
+  if (auto && autoCycle) {
+    toast('休息结束，自动开始下一个番茄');
+    startFocus(lastMinutes);
+  } else {
+    toast('休息结束，继续吧');
+  }
+}
+
+/* 每 500ms 看一眼本地的时间戳。不数秒，只算「到没到」。 */
+function timers() {
+  if (!UID) return;
+  const now = nowMs();
+  const f = read(KEY_F);
+  const b = read(KEY_B);
+  const btn = $('b-focus'), t = $('b-focus-t'), sub = $('f-sub');
+
+  if (f && now < f.endsAt) {
+    focusingNow = true;
+    btn.className = 'dk focus live';
+    t.textContent = fmt(f.endsAt - now);
+    sub.textContent = '专注中 · 点开';
+    $('f-time').textContent = fmt(f.endsAt - now);
+    $('focus').classList.toggle('hidden', !focusOpen);
+    updateTomato();
+  } else if (f) {
+    focusingNow = false;
+    settleFocus();
+  } else if (b && now < b.endsAt) {
+    focusingNow = false;
+    btn.className = 'dk focus brk';
+    t.textContent = fmt(b.endsAt - now);
+    sub.textContent = '休息中 · 点开';
+    $('focus').classList.add('hidden');
+  } else if (b) {
+    endBreak(true);
+  } else {
+    focusingNow = false;
+    btn.className = 'dk focus';
+    t.textContent = '专注';
+    sub.textContent = '25 / 45 分钟';
+    $('focus').classList.add('hidden');
+  }
+  tickCountdowns();
+}
+
+function openFocusPicker() {
+  const f = read(KEY_F), b = read(KEY_B);
+  if (f && f.endsAt > nowMs()) { focusOpen = true; $('focus').classList.remove('hidden'); return; }
+
+  let top = '';
+  if (b && b.endsAt > nowMs()) {
+    top = `<p class="note">正在休息，还剩 ${fmt(b.endsAt - nowMs())}。休息结束会提醒你。</p>
+      <div class="row2"><button class="btn" id="skip-break">跳过休息，直接选</button></div>`;
+  }
+  const bd = openSheet('专注多久', `${top}${MODES.map(([m, r]) => `
+    <div class="row2"><button class="btn primary mode" data-m="${m}" style="height:72px">
+      专注 ${m} 分钟<br><small style="font-weight:400;opacity:.85">之后休息 ${r} 分钟 · 券 +${m >= 45 ? 2 : 1}</small></button></div>`).join('')}
+    <p class="note">完成的专注会给你券和一颗种子。中途放弃没有奖励，但 5 分钟内重新开始同样时长会接着算。</p>`);
+  bd.querySelector('[data-m="25"]').addEventListener('click', () => pick(25));
+  bd.querySelector('[data-m="45"]').addEventListener('click', () => pick(45));
+  const sk = bd.querySelector('#skip-break');
+  if (sk) sk.addEventListener('click', async () => { write(KEY_B, null); cancelNotify(1002); await call('/api/break/end', {}); closeSheet(); openFocusPicker(); });
+
+  async function pick(m) { closeSheet(); startFocus(m); }
+}
+
+/* 系统通知：由系统闹钟到点才响，不依赖页面还活着 */
+async function scheduleNotify(id, at, title, body) {
+  const C = window.Capacitor;
+  const LN = C && C.Plugins && C.Plugins.LocalNotifications;
+  if (!LN) return;
+  const when = at - SRV_SKEW;                 // 服务器时间 → 本机时间
+  if (!(when > Date.now() + 2000)) return;    // 已经过去的时间点不要立刻弹出来
+  try {
+    let perm = await LN.checkPermissions();
+    if (perm.display !== 'granted') perm = await LN.requestPermissions();
+    if (perm.display !== 'granted') return;
+    await LN.cancel({ notifications: [{ id }] });
+    await LN.schedule({ notifications: [{ id, title, body, schedule: { at: new Date(when), allowWhileIdle: true } }] });
+  } catch (e) { console.warn('通知失败', e); }
+}
+async function cancelNotify(id) {
+  const LN = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.LocalNotifications;
+  if (!LN) return;
+  try { await LN.cancel({ notifications: [{ id }] }); } catch { /* ignore */ }
+}
+
+/* ---------------- 猪 ---------------- */
+const pig = $('pig');
+const pigS = { x: innerWidth / 2, y: 0, tx: 0, ty: 0, walking: false, until: 0, mode: 'idle', last: 0 };
+
+function setPigMode(mode) {
+  if (pigS.mode === mode) return;
+  pigS.mode = mode;
+  pig.src = BASE + (mode === 'walk' ? 'assets/walk.gif' : 'assets/pig.gif');
+}
+
+function pigTick(dt) {
+  const W = innerWidth, gy = Scene.groundY();
+  const range = Math.min(focusingNow ? 110 : 170, (innerHeight - gy) * 0.52);
+  const y0 = gy + 74, now = performance.now();
+  const half = 84;                                   // 猪身一半宽，别走到屏幕外
+  const hour = Scene.hour();
+  const sleeping = hour >= 23 || hour < 6;
+  $('zzz').classList.toggle('hidden', !sleeping || pigS.walking);
+
+  if (!pigS.y) { pigS.y = y0 + range * 0.35; pigS.x = W / 2; }
+  $('zzz').style.left = (pigS.x + 46) + 'px';
+  $('zzz').style.top = (pigS.y - 140) + 'px';
+
+  if (pigS.walking) {
+    const dx = pigS.tx - pigS.x, dy = pigS.ty - pigS.y;
+    const dist = Math.hypot(dx, dy);
+    const sp = 52 * (sleeping ? 0.45 : 1) * (focusingNow ? 0.65 : 1);
+    if (dist < 3) {
+      pigS.walking = false; setPigMode('idle');
+      pigS.until = now + (focusingNow ? 7000 : 2500) + Math.random() * (sleeping ? 12000 : 6500);
+    } else {
+      pigS.x += (dx / dist) * sp * dt;
+      pigS.y += (dy / dist) * sp * dt;
+    }
+  } else if (now > pigS.until) {
+    pigS.tx = half + Math.random() * Math.max(20, W - half * 2);
+    pigS.ty = y0 + Math.random() * range;
+    pigS.walking = true; setPigMode('walk');
+  }
+  const moving = pigS.walking ? (pigS.tx - pigS.x) : 0;
+  pig.style.left = pigS.x + 'px';
+  pig.style.top = pigS.y + 'px';
+  pig.style.scale = moving < 0 ? '1 1' : '-1 1';        // 素材本身朝左
+}
+
+let bubbleTimer = null;
+function say(text) {
+  const b = $('bubble');
+  b.textContent = text;
+  b.classList.remove('hidden');
+  b.style.left = pigS.x + 'px';
+  b.style.top = (pigS.y - 150) + 'px';
+  clearTimeout(bubbleTimer);
+  bubbleTimer = setTimeout(() => b.classList.add('hidden'), 2200);
+}
+
+function hopPig() {
+  pig.classList.remove('hop');
+  void pig.offsetWidth;
+  pig.classList.add('hop');
+  setTimeout(() => pig.classList.remove('hop'), 620);
+}
+
+const LINES = ['哼哼。', '今天也要加油。', '地里又长草了。', '你来了。', '抽到新的了吗？', '我想吃胡萝卜。', '别摸了，该专注了。', '朋友那边还好吗？'];
+const NIGHT_LINES = ['呼……', '（睡着了）', 'z z'];
+pig.addEventListener('click', (e) => {
+  e.stopPropagation();
+  hopPig();
+  playOink(0.9 + Math.random() * 0.3);
+  const hour = Scene.hour();
+  say((hour >= 23 || hour < 6) ? NIGHT_LINES[Math.floor(Math.random() * NIGHT_LINES.length)]
+    : LINES[Math.floor(Math.random() * LINES.length)]);
+});
+
+/* ---------------- 抽卡 ---------------- */
+let drawing = false;
+async function doDraw() {
+  if (drawing) return;
+  drawing = true;
+  const card = $('card');
+  card.classList.remove('flip', 'rare', 'legend');
+  $('c-img').removeAttribute('src');
+  $('d-hint').textContent = '抽…';
+  $('draw').classList.remove('hidden');
+  $('draw').dataset.ready = '';
+
+  const r = await call('/api/draw');
+  drawing = false;
+  if (r.status !== 200) {
+    $('draw').classList.add('hidden');
+    toast(r.body.message || '抽不了');
+    if (r.status === 402) refresh();
+    return;
+  }
+  const c = r.body.card;
+  adopt(r.body.me);
+  $('c-img').src = imgOf(c.id);
+  $('c-name').textContent = c.title;
+  $('c-tag').textContent = r.body.isNew ? `${RARITY[c.rarity]} · 新的！` : `${RARITY[c.rarity]} · 第 ${c.count} 次，EX ${c.ex}`;
+  if (c.rarity !== 'common') card.classList.add(c.rarity);
+  $('d-hint').textContent = r.body.free ? '今天免费的一抽' : '用掉 1 张券';
+
+  setTimeout(() => {
+    card.classList.add('flip');
+    delete $('draw').dataset.ready;
+    playOink(c.rarity === 'legend' ? 1.5 : 1.1);
+    if (navigator.vibrate) navigator.vibrate(c.rarity === 'legend' ? [40, 60, 120] : 25);
+  }, 450);
+  refresh();
+}
+
+/* ---------------- 图鉴：小球池 ---------------- */
+function openBook() {
+  if (!pit) {
+    pit = new BallPit($('pit'), imgOf);
+    pit.onTap = (b) => openViewer(b.id);
+  }
+  const items = Object.entries(ME.cards || {}).map(([id, c]) => ({ id: Number(id), count: c.count, rarity: c.rarity, title: c.title, ex: c.ex }));
+  $('pit-n').textContent = items.length;
+  $('pit-ov').classList.remove('hidden');
+  pit.resize();
+  pit.setItems(items);
+  // 已有的球重新从上面倒下来
+  for (const b of pit.balls) { b.y = -b.r - Math.random() * 800; b.x = 20 + Math.random() * (pit.W - 40); }
+  pit.open();
+}
+
+function openViewer(id) {
+  const c = (ME.cards || {})[id];
+  if (!c) return;
+  $('v-img').src = imgOf(id);
+  $('v-name').textContent = c.title || ('#' + id);
+  $('v-sub').textContent = `抽到 ${c.count} 次 · EX ${c.ex} · ${RARITY[c.rarity]}`;
+  $('viewer').classList.remove('hidden');
+}
+
+/* ---------------- 种子 / 植物 ---------------- */
+function openSeeds() {
+  const seeds = ME.seeds || [];
+  if (!seeds.length) { toast('没有种子。完成一次专注就会得到一颗。'); return; }
+  const bd = openSheet('种点什么', `<p class="note">选一颗，然后点一下地选位置。种下后 2 小时长满，离开也会长。</p>
+    <div class="list">${seeds.map((s) => `<div class="item"><span style="font-size:22px">${s.species === 'sunflower' ? '🌻' : s.species === 'tulip' ? '🌷' : s.species === 'carrot' ? '🥕' : '🌼'}</span><b>${s.name}</b><button class="mini pink" data-seed="${s.id}">种下</button></div>`).join('')}</div>
+    <div class="sec">地里（${(ME.plants || []).length} / 16）</div>
+    ${(ME.plants || []).length ? `<div class="list">${ME.plants.map((p) => `<div class="item"><span style="font-size:20px">${p.species === 'sunflower' ? '🌻' : p.species === 'tulip' ? '🌷' : p.species === 'carrot' ? '🥕' : '🌼'}</span><b>${p.name}</b><small>${Math.round(p.growth * 100)}%</small><button class="del" data-pull="${p.id}" title="拔掉">✕</button></div>`).join('')}</div>` : '<p class="note">还空着。</p>'}`);
+  bd.querySelectorAll('[data-seed]').forEach((b) => b.addEventListener('click', () => {
+    planting = b.dataset.seed;
+    closeSheet();
+    $('plant-tip').classList.remove('hidden');
+  }));
+  bd.querySelectorAll('[data-pull]').forEach((b) => b.addEventListener('click', async () => {
+    const r = await call('/api/plant/remove', { id: b.dataset.pull });
+    if (r.status === 200) { adopt(r.body.me); refresh(); openSeeds(); toast('拔掉了'); }
+  }));
+}
+
+async function doPlant(x) {
+  const id = planting;
+  planting = null;
+  $('plant-tip').classList.add('hidden');
+  const r = await call('/api/plant', { id, x });
+  if (r.status !== 200) { toast(r.body.message || '种不了'); return; }
+  adopt(r.body.me);
+  playOink(1.4);
+  toast(`种下了一颗${r.body.plant.name}`);
+  refresh();
+}
+
+/* 点空地：如果在选位置，就种下去 */
+$('main').addEventListener('click', (e) => {
+  if (!planting) return;
+  if (e.target.closest('button, #pig, #friends, header')) return;
+  if (e.clientY < Scene.groundY() + 20) { toast('要种在地上'); return; }
+  doPlant(clamp(e.clientX / innerWidth, 0.03, 0.97));
+});
+$('plant-cancel').addEventListener('click', () => { planting = null; $('plant-tip').classList.add('hidden'); });
+$('seed-btn').addEventListener('click', openSeeds);
+
+/* ---------------- 待办 ---------------- */
+function openTodo() {
+  const todos = ME.todos || [];
+  const left = ME.todoRewardMax - ME.todoRewarded;
+  const bd = openSheet('待办', `<div class="inline"><input id="td-in" maxlength="40" placeholder="要做什么"><button class="btn primary" id="td-add" style="min-width:0;padding:12px 18px">加</button></div>
+    <p class="note">完成一条待办 +1 张券，每天最多 ${ME.todoRewardMax} 条有奖励（今天还剩 ${left} 条）。</p>
+    <div class="list" id="td-list">${todos.length ? todos.map((t) => todoRow(t)).join('') : '<p class="note">还没有待办。</p>'}</div>`);
+  const add = async () => {
+    const text = $('td-in').value.trim();
+    if (!text) return;
+    const r = await call('/api/todo', { text });
+    if (r.status === 200) { adopt(r.body.me); refresh(); openTodo(); } else toast(r.body.message || '加不了');
+  };
+  bd.querySelector('#td-add').addEventListener('click', add);
+  bd.querySelector('#td-in').addEventListener('keydown', (e) => { if (e.key === 'Enter') add(); });
+  bindTodo(bd);
+}
+function todoRow(t) {
+  return `<div class="item"><button class="ok ${t.done ? 'on' : ''}" data-done="${t.id}">${t.done ? '✓' : ''}</button><b class="${t.done ? 'done' : ''}">${esc(t.text)}</b>${t.rewarded ? '<small>券 +1</small>' : ''}<button class="del" data-del="${t.id}">✕</button></div>`;
+}
+function bindTodo(bd) {
+  bd.querySelectorAll('[data-done]').forEach((b) => b.addEventListener('click', async () => {
+    const r = await call('/api/todo/done', { id: b.dataset.done });
+    if (r.status !== 200) { toast(r.body.message || '不行'); return; }
+    adopt(r.body.me);
+    if (r.body.rewarded) { toast('完成！券 +1'); playOink(1.5); }
+    else toast('完成了。今天的待办奖励已经领满了');
+    refresh(); openTodo();
+  }));
+  bd.querySelectorAll('[data-del]').forEach((b) => b.addEventListener('click', async () => {
+    await call('/api/todo/del', { id: b.dataset.del });
+    refresh(); openTodo();
+  }));
+}
+
+/* ---------------- 统计 ---------------- */
+const fmtMin = (m) => {
+  const v = Math.round((Number(m) || 0) * 10) / 10;
+  return Number.isInteger(v) ? String(v) : v.toFixed(1);
+};
+
+function bars(arr, cls) {
+  const max = Math.max(1, ...arr);
+  return `<div class="bars ${cls}">${arr.map((v, i) => `<i style="height:${Math.max(2, (v / max) * 100)}%" class="${cls === 'focus' && i === arr.length - 1 ? 'today' : ''}"></i>`).join('')}</div>`;
+}
+
+async function openStats() {
+  const bd = openSheet('统计', '<p class="note">读取中…</p>');
+  const r = await call('/api/stats', null, 'GET');
+  if (r.status !== 200) { bd.innerHTML = `<p class="note">${esc(r.body.message || '读不到')}</p>`; return; }
+  const s = r.body;
+  const totalMin = Math.round((Number(s.total.minutes) || 0) * 10) / 10;
+  const hours = Math.floor(totalMin / 60), mins = Math.round((totalMin % 60) * 10) / 10;
+  const totalText = totalMin < 60 ? `${fmtMin(totalMin)} 分钟` : `${hours} 小时 ${fmtMin(mins)} 分`;
+  bd.innerHTML = `
+    <div class="tiles">
+      <div class="tile"><b>${s.today.count} 次</b><span>今日专注 · ${fmtMin(s.today.minutes)} 分钟</span></div>
+      <div class="tile"><b>${totalText}</b><span>累计专注 · ${s.total.count} 次</span></div>
+      <div class="tile"><b>${s.streak} 天</b><span>连续打卡</span></div>
+      <div class="tile"><b>${s.todosDone} 条</b><span>完成待办</span></div>
+      <div class="tile"><b>${s.have} / ${s.totalCards}</b><span>图鉴 · 稀有 ${s.byR.rare} · 传说 ${s.byR.legend}</span></div>
+      <div class="tile"><b>${s.breaks} 次</b><span>休息 · 共抽 ${s.draws} 次</span></div>
+    </div>
+    <div class="sec">近 14 天每天专注多少分钟</div>
+    ${bars(s.perDay.map((d) => d.minutes), 'focus')}
+    <div class="axis"><span>${s.perDay[0].d.slice(5)}</span><span>今天</span></div>
+    <div class="sec">一天里什么时段在专注（24 小时）</div>
+    ${bars(s.hourHist, '')}
+    <div class="axis"><span>0 点</span><span>6</span><span>12</span><span>18</span><span>24 点</span></div>
+    <div class="sec">起床 / 睡觉打卡</div>
+    <div class="list">${s.perDay.slice(-7).reverse().map((d) => `<div class="item"><b>${d.d.slice(5)}${d.d === s.perDay[13].d ? '（今天）' : ''}</b><small>起床 ${d.wake ? hhmm(d.wake) : '—'}</small><small>睡觉 ${d.sleep ? hhmm(d.sleep) : '—'}</small></div>`).join('')}</div>`;
+}
+
+/* ---------------- 今日目标（客户端计算，不依赖新接口） ---------------- */
+const dkey = (ts = Date.now()) => new Date(ts + 8 * 3600000).toISOString().slice(0, 10);
+
+function openDaily() {
+  const focusN = (ME.todayFocus && ME.todayFocus.count) || 0;
+  const doneToday = (ME.todos || []).filter((t) => t.done && t.doneAt && dkey(t.doneAt) === dkey()).length;
+  const rows = [
+    { t: '专注 1 次', ok: focusN >= 1, sub: `${Math.min(focusN, 1)} / 1` },
+    { t: '完成 2 条待办', ok: doneToday >= 2, sub: `${doneToday} / 2` },
+    { t: '今天来抽一只', ok: !!ME.cameToday, sub: ME.cameToday ? '已打卡' : '还没' },
+  ];
+  const done = rows.filter((r) => r.ok).length;
+  openSheet('今日目标', `
+    <p class="note">每天把这三件做完，猪就会更亲近你。${done === 3 ? '今天全完成了，厉害。' : ''}</p>
+    <div class="list">${rows.map((r) => `<div class="item"><button class="ok ${r.ok ? 'on' : ''}">${r.ok ? '✓' : ''}</button><b class="${r.ok ? 'done' : ''}">${r.t}</b><small>${r.sub}</small></div>`).join('')}</div>
+    <div class="tiles" style="margin-top:14px">
+      <div class="tile"><b>${done} / 3</b><span>今日进度</span></div>
+      <div class="tile"><b>${ME.streak || 0} 天</b><span>连续打卡</span></div>
+    </div>`);
+}
+
+/* ---------------- 我（头像 / 起床睡觉 / 入口） ---------------- */
+async function openProfile() {
+  const cards = Object.entries(ME.cards || {}).sort((a, b) => b[1].lastAt - a[1].lastAt).slice(0, 20);
+  const bd = openSheet(ME.name, `
+    <div class="avgrid">
+      <button data-av="0" class="${!ME.avatar ? 'on' : ''}"><img src="${BASE}assets/pig.gif" alt=""></button>
+      ${cards.map(([id]) => `<button data-av="${id}" class="${ME.avatar === Number(id) ? 'on' : ''}"><img src="${imgOf(id)}" alt=""></button>`).join('')}
+    </div>
+    <p class="note">点一个换头像。</p>
+    <div class="sec">起床 / 睡觉打卡</div>
+    <div class="row2">
+      <button class="btn" id="dc-wake">起床打卡<br><small>${ME.wake ? hhmm(ME.wake) : '还没打'}</small></button>
+      <button class="btn" id="dc-sleep">睡觉打卡<br><small>${ME.sleep ? hhmm(ME.sleep) : '还没打'}</small></button>
+    </div>
+    <div class="sec">专注方式</div>
+    <div class="toggle" id="p-cycle"><span>连续专注 · 自动番茄钟<br><small style="font-weight:400;color:var(--dim)">专注结束自动进休息，休息结束自动开下一轮</small></span><span class="sw ${autoCycle ? 'on' : ''}"></span></div>
+    <div class="sec">更多</div>
+    <div class="row2"><button class="btn" id="p-stats">统计</button><button class="btn" id="p-station">站与邀请</button></div>
+    <div class="row2"><button class="btn" id="p-sound">声音：${soundOn ? '开' : '关'}</button>${ME.admin ? '<button class="btn" id="p-admin">开发者</button>' : '<button class="btn" id="p-logout">换个名字</button>'}</div>
+    ${ME.admin ? '<div class="row2"><button class="btn" id="p-logout">换个名字</button></div>' : ''}`);
+  bd.querySelectorAll('[data-av]').forEach((b) => b.addEventListener('click', async () => {
+    const r = await call('/api/avatar', { cardId: Number(b.dataset.av) });
+    if (r.status === 200) { adopt(r.body.me); refresh(); toast('头像换好了'); openProfile(); }
+  }));
+  const daycheck = async (kind) => {
+    const r = await call('/api/daycheck', { kind });
+    toast(r.status === 200 ? `${kind === 'wake' ? '早上好' : '晚安'}，${hhmm(r.body.at)}` : r.body.message);
+    if (r.status === 200) { adopt(r.body.me); openProfile(); }
+  };
+  bd.querySelector('#dc-wake').addEventListener('click', () => daycheck('wake'));
+  bd.querySelector('#dc-sleep').addEventListener('click', () => daycheck('sleep'));
+  bd.querySelector('#p-stats').addEventListener('click', openStats);
+  bd.querySelector('#p-cycle').addEventListener('click', () => {
+    autoCycle = !autoCycle;
+    localStorage.setItem('pig.autocycle', autoCycle ? '1' : '0');
+    toast(autoCycle ? '已打开连续专注' : '已关闭连续专注', 1600);
+    openProfile();
+  });
+  bd.querySelector('#p-station').addEventListener('click', openStation);
+  bd.querySelector('#p-sound').addEventListener('click', () => {
+    soundOn = !soundOn; localStorage.setItem('pig.sound', soundOn ? '1' : '0'); openProfile();
+  });
+  bd.querySelector('#p-logout').addEventListener('click', () => { closeSheet(); logout(); });
+  const adm = bd.querySelector('#p-admin');
+  if (adm) adm.addEventListener('click', openAdmin);
+}
+
+/* ---------------- 站 ---------------- */
+function openStation() {
+  const link = `${location.origin}${location.pathname}?c=${S.code}`;
+  const bd = openSheet('站', `
+    <p class="note">把这个站码发给朋友，他们在登录时填上就能进来。一个站最多 6 个人，互相看得见谁在专注。</p>
+    <div class="item"><b>站码</b><span class="code">${S.code}</span><button class="mini pink" id="st-copy">复制</button></div>
+    <div class="sec">站里的人</div>
+    <div class="list">${S.members.map((m) => `<div class="item"><img src="${avatarOf(m)}" alt=""><b>${esc(m.name)}${m.uid === ME.uid ? '（我）' : ''}</b><small>${m.count} 只</small></div>`).join('')}</div>
+    <div class="sec">站里的图鉴（大家抽到的合在一起）</div><p class="note">${S.collected} / ${S.total}</p>`);
+  bd.querySelector('#st-copy').addEventListener('click', async () => {
+    try { await navigator.clipboard.writeText(S.code); toast('站码已复制'); }
+    catch { toast(S.code); }
+  });
+}
+
+/* ---------------- 开发者 ---------------- */
+const FLAG_NAMES = { pat: '允许摸猪', seeds: '专注给种子', todoReward: '待办给券', sound: '默认开声音' };
+async function openAdmin() {
+  const bd = openSheet('开发者', '<p class="note">读取中…</p>');
+  const r = await call('/api/admin/overview', null, 'GET');
+  if (r.status !== 200) { bd.innerHTML = `<p class="note">${esc(r.body.message || '没有权限')}</p>`; return; }
+  const d = r.body;
+  bd.innerHTML = `
+    <div class="sec">功能开关（对所有人生效）</div>
+    ${Object.keys(FLAG_NAMES).map((k) => `<div class="toggle" data-flag="${k}"><span>${FLAG_NAMES[k]}</span><span class="sw ${d.flags[k] ? 'on' : ''}"></span></div>`).join('')}
+    <div class="sec">所有人</div>
+    <div class="list">${d.accounts.map((a) => `<div class="item"><img src="${a.avatar ? imgOf(a.avatar) : BASE + 'assets/pig.gif'}" onerror="this.src='${BASE}assets/pig.gif'" alt=""><b>${esc(a.name)}${a.admin ? ' · 开发者' : ''}</b><small>${a.cards} 只 · 专注 ${a.focusMin} 分</small><button class="mini green" data-g="${a.uid}">+券</button><button class="mini" data-s="${a.uid}">+种子</button><button class="mini" data-r="${a.uid}">可再抽</button>${a.admin ? '' : `<button class="mini" data-a="${a.uid}">设开发</button>`}</div>`).join('')}</div>
+    <p class="note">「+券」「+种子」每次加 1（券最多 5，种子最多 9）。「可再抽」把这个人今天的免费抽还原。</p>`;
+  bd.querySelectorAll('[data-flag]').forEach((el) => el.addEventListener('click', async () => {
+    const k = el.dataset.flag;
+    const f = await call('/api/admin/flags', { key: k, value: !d.flags[k] });
+    if (f.status === 200) { d.flags = f.body.flags; el.querySelector('.sw').classList.toggle('on', d.flags[k]); }
+  }));
+  const grant = async (target, body, after) => {
+    const g = await call('/api/admin/grant', { target, ...body });
+    if (g.status !== 200) { toast(g.body.message || '失败'); return; }
+    toast(after(g.body)); openAdmin();
+  };
+  bd.querySelectorAll('[data-g]').forEach((b) => b.addEventListener('click', () => grant(b.dataset.g, { tickets: 1 }, (x) => `券 → ${x.tickets}`)));
+  bd.querySelectorAll('[data-s]').forEach((b) => b.addEventListener('click', () => grant(b.dataset.s, { seeds: 1 }, (x) => `种子 → ${x.seeds}`)));
+  bd.querySelectorAll('[data-r]').forEach((b) => b.addEventListener('click', async () => {
+    await call('/api/admin/resetdraw', { target: b.dataset.r }); toast('已还原今天的免费抽');
+  }));
+  bd.querySelectorAll('[data-a]').forEach((b) => b.addEventListener('click', async () => {
+    const x = await call('/api/admin/addadmin', { target: b.dataset.a });
+    toast(x.status === 200 ? '已经是开发者了' : x.body.message); openAdmin();
+  }));
+}
+
+/* ---------------- 摸一下 ---------------- */
+$('friends').addEventListener('click', async (e) => {
+  const el = e.target.closest('.fr');
+  if (!el) return;
+  if (el.dataset.uid === ME.uid) { openProfile(); return; }
+  const r = await call('/api/pat', { target: el.dataset.uid });
+  if (r.status === 200) { playOink(1.2); toast(`摸了一下 ${el.dataset.name} 的猪`); }
+  else toast(r.body.message || '不行');
+});
+
+/* ---------------- 事件 ---------------- */
+$('sheet-x').addEventListener('click', closeSheet);
+$('sheet-ov').addEventListener('click', (e) => { if (e.target === $('sheet-ov')) closeSheet(); });
+$('h-avatar').addEventListener('click', openProfile);
+$('h-streak-box').addEventListener('click', openDaily);
+$('b-draw').addEventListener('click', doDraw);
+$('b-focus').addEventListener('click', openFocusPicker);
+$('b-todo').addEventListener('click', openTodo);
+$('b-book').addEventListener('click', openBook);
+$('pit-x').addEventListener('click', () => { $('pit-ov').classList.add('hidden'); pit && pit.close(); });
+$('v-close').addEventListener('click', () => $('viewer').classList.add('hidden'));
+$('viewer').addEventListener('click', (e) => { if (e.target === $('viewer')) $('viewer').classList.add('hidden'); });
+
+$('draw').addEventListener('click', () => {
+  if ($('draw').dataset.ready !== undefined) return;
+  $('draw').classList.add('hidden');
+});
+
+$('f-min').addEventListener('click', () => { focusOpen = false; $('focus').classList.add('hidden'); });
+
+let stopArmed = false, stopTimer = null;
+$('f-stop').addEventListener('click', async () => {
+  const btn = $('f-stop');
+  if (!stopArmed) {
+    stopArmed = true;
+    btn.textContent = '再点一次确认';
+    clearTimeout(stopTimer);
+    stopTimer = setTimeout(() => { stopArmed = false; btn.textContent = '放弃'; }, 2600);
+    return;
+  }
+  stopArmed = false; clearTimeout(stopTimer); btn.textContent = '放弃';
+  const f = read(KEY_F);
+  write(KEY_F, null);
+  cancelNotify(1001);
+  focusOpen = false;
+  $('focus').classList.add('hidden');
+  toast(f && nowMs() >= f.endsAt ? '这次已经做完了，正在结算' : '已放弃');
+  await settleIfPending(f);
+  timers();
+});
+
+/* 放弃时如果其实已经到点了，仍然按完成结算 */
+async function settleIfPending(f) {
+  if (!f) return;
+  if (nowMs() >= f.endsAt) {
+    // 重新写回去，让 settleFocus 走正常的完成流程
+    write(KEY_F, f);
+    lastSettleTry = 0;
+    await settleFocus(true);
+  } else {
+    const r = await call('/api/focus/end', { abandon: true });
+    if (r.status === 200) adopt(r.body.me);
+    refresh();
+  }
+}
+
+/* ---------------- 实时 ---------------- */
+function connect() {
+  if (es) { try { es.close(); } catch { /* ignore */ } }
+  es = new EventSource(api(`api/stream?code=${encodeURIComponent(CODE)}`));
+  es.addEventListener('message', (e) => {
+    try {
+      const m = JSON.parse(e.data);
+      if (m.type === 'feed') pushFeed(m.text);
+      if (m.type === 'presence') refresh();
+    } catch { /* ignore */ }
+  });
+}
+
 let hbTimer = null;
 function heartbeat() {
   clearInterval(hbTimer);
-  hbTimer = setInterval(() => {
-    if (document.hidden || !CODE) return;
-    const f = focusState();
-    call('api/presence', {
-      method: 'POST',
-      body: JSON.stringify({ state: f && f.endsAt > Date.now() ? 'focusing' : 'idle' }),
-    }).catch(() => {});
+  hbTimer = setInterval(async () => {
+    if (document.hidden || !UID) return;
+    const f = read(KEY_F), b = read(KEY_B);
+    const now = nowMs();
+    const state = f && now < f.endsAt ? 'focusing' : b && now < b.endsAt ? 'breaking' : 'idle';
+    await call('/api/presence', { state });
+    if (state === 'idle') refresh();            // 顺手把别人的状态也拉一下
   }, 30000);
 }
 
-/* 回到前台：补算专注 + 刷新 */
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState !== 'visible') return;
-  const f = focusState();
-  if (f && Date.now() >= f.endsAt) settleFocus();
-  else updateFocusUI();
+  timers();
   refresh();
   if (!es || es.readyState === 2) connect();
 });
 
-/* ---------------- 启动 ---------------- */
+/* ---------------- 原生 ---------------- */
 function setupNative() {
   const C = window.Capacitor;
   if (!C || !C.Plugins) return;
   const App = C.Plugins.App;
   if (App && App.addListener) {
     App.addListener('backButton', () => {
-      const open = [...document.querySelectorAll('.overlay:not(.hidden)')].pop();
-      if (open) { open.classList.add('hidden'); return; }
+      const open = [...document.querySelectorAll('#viewer:not(.hidden), #pit-ov:not(.hidden), #sheet-ov:not(.hidden), #focus:not(.hidden)')].pop();
+      if (open) {
+        if (open.id === 'focus') focusOpen = false;
+        if (open.id === 'pit-ov') pit && pit.close();
+        open.classList.add('hidden');
+        return;
+      }
       if (App.exitApp) App.exitApp();
     });
-    App.addListener('resume', () => {
-      const f = focusState();
-      if (f && Date.now() >= f.endsAt) settleFocus();
-      else updateFocusUI();
-      refresh();
-      if (!es || es.readyState === 2) connect();
-    });
+    App.addListener('resume', () => { timers(); refresh(); if (!es || es.readyState === 2) connect(); });
   }
   const SB = C.Plugins.StatusBar;
-  if (SB) {
-    try { SB.setStyle({ style: 'DARK' }); SB.setBackgroundColor({ color: '#05070a' }); } catch (_) {}
-  }
+  if (SB) { try { SB.setStyle({ style: 'LIGHT' }); SB.setBackgroundColor({ color: '#8fd0ff' }); } catch { /* ignore */ } }
 }
 
-function toast(msg) {
-  const t = $('toast');
-  t.textContent = msg;
-  t.classList.add('on');
-  clearTimeout(t._t);
-  t._t = setTimeout(() => t.classList.remove('on'), 2200);
+/* ---------------- 登录 ---------------- */
+async function doLogin() {
+  const name = $('j-name').value.trim();
+  const code = $('j-code').value.trim().toUpperCase();
+  if (!name) { $('j-err').textContent = '先填一个名字'; return; }
+  $('j-err').textContent = '';
+  $('j-go').disabled = true;
+  const r = await call('/api/login', { name, code });
+  $('j-go').disabled = false;
+  if (r.status !== 200) { $('j-err').textContent = r.body.message || '进不去'; return; }
+  UID = r.body.uid; CODE = r.body.code;
+  localStorage.setItem('pig.uid', UID);
+  localStorage.setItem('pig.code', CODE);
+  S = r.body.state; ME = r.body.me;
+  enter();
+  if (r.body.isNew) setTimeout(() => toast('欢迎。先抽一只吧'), 600);
+}
+$('j-go').addEventListener('click', doLogin);
+$('j-code').addEventListener('keydown', (e) => { if (e.key === 'Enter') doLogin(); });
+
+function enter() {
+  $('login').classList.add('hidden');
+  $('main').classList.remove('hidden');
+  pigS.until = performance.now() + 1500;
+  render();
+  connect();
+  heartbeat();
+}
+
+/* ---------------- 启动 ---------------- */
+function loop() {
+  const now = performance.now();
+  const dt = Math.min(0.05, (now - pigS.last) / 1000 || 0.016);
+  pigS.last = now;
+  pigTick(dt);
+  requestAnimationFrame(loop);
 }
 
 async function boot() {
   if (NATIVE) setupNative();
-  resize();
-  startWander();
-  setInterval(applySleep, 60000);
-  addEventListener('resize', resize);
-  tickTimer = setInterval(() => {
-    updateFocusUI();
-    const m = new Date().getMinutes();
-    if (m === 0) drawSky();
-  }, 1000);
-  setInterval(drawSky, 60000);
+  // 清掉上次残留的定时通知：否则可能会出现「一打开就收到专注结束」
+  cancelNotify(1001);
+  cancelNotify(1002);
+  Scene.resize();
+  addEventListener('resize', () => { Scene.resize(); Scene.render(); });
+  setInterval(() => { if (!document.hidden) Scene.render(); }, 100);
+  setInterval(timers, 500);
+  requestAnimationFrame(loop);
 
-  // 邀请链接：?c=站码 预填，?n=名字 直接进
+  // 调试 / 截图用：?h=15.5 强制某个时刻，?open=book|todo|stats|profile|station|admin
   const q = new URLSearchParams(location.search);
-  if (q.get('h') != null) { FORCE_H = parseFloat(q.get('h')); drawSky(); }
+  if (q.get('h') != null) Scene.forceHour(parseFloat(q.get('h')));
   const qc = (q.get('c') || '').toUpperCase();
   const qn = q.get('n') || '';
   if (qc) $('j-code').value = qc;
-  if (qn) $('j-name').value = qn;
-  if (qc && qn && !CODE) {
-    history.replaceState(null, '', location.pathname);
-    $('j-go').click();
-    return;
+
+  let ok = false;
+  if (UID) {
+    const r = await call('/api/me', null, 'GET');
+    if (r.status === 200) { ME = r.body; ok = true; }
   }
-  if (qc) history.replaceState(null, '', location.pathname + '?c=' + qc);
+  if (ok) {
+    const st = await call('/api/state', null, 'GET');
+    if (st.status === 200) { S = st.body; enter(); }
+    else ok = false;
+  }
+  if (!ok) logout();
+  if (!ok && qn) { $('j-name').value = qn; await doLogin(); if (ME) ok = true; }
 
-  if (!CODE) { showJoin(); return; }
+  const co = $('cover');
+  co.classList.add('off');
+  setTimeout(() => co.remove(), 600);
 
-  const { status, body } = await call(`api/state?code=${encodeURIComponent(CODE)}`);
-  if (status !== 200) { showJoin('站码失效了，重新进一次'); return; }
-  S = body; ME = body.me;
-  showMain();
-  connect();
-  heartbeat();
-  if (q.get('open') === 'book') openBook();
-
-  const f = focusState();
-  if (f && Date.now() >= f.endsAt) settleFocus();
+  const open = q.get('open');
+  if (ok && open) setTimeout(() => {
+    if (open === 'book') openBook(); else if (open === 'todo') openTodo(); else if (open === 'stats') openStats();
+    else if (open === 'profile') openProfile(); else if (open === 'station') openStation(); else if (open === 'admin') openAdmin();
+  }, 400);
+  if (qc || qn) history.replaceState(null, '', location.pathname);
 }
 
 boot();
