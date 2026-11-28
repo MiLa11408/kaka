@@ -421,15 +421,35 @@ async function cancelNotify(id) {
 
 /* ---------------- 猪 ---------------- */
 const pig = $('pig');
-const pigS = { x: innerWidth / 2, y: 0, tx: 0, ty: 0, walking: false, until: 0, mode: 'idle', last: 0, dir: 1 };
+const pigS = { x: innerWidth / 2, y: 0, tx: 0, ty: 0, walking: false, until: 0, mode: 'idle', last: 0, dir: 1, ox: 0, oy: 0, vw: 0 };
+
+/* 两张素材的画布和留白差很多：pig.gif 512×512 猪几乎占满，walk.gif 347×304 猪只占中间。
+   按「非透明像素的实际包围盒」归一化，换成同样高度、脚底对齐，切换动作就不会跳。 */
+const PIG_METRICS = {
+  idle: { w: 512, h: 512, cx: 21, cy: 65, cw: 482, ch: 417 },
+  walk: { w: 347, h: 304, cx: 26, cy: 72, cw: 307, ch: 219 },
+};
+
+function applyPigMode(mode) {
+  const m = PIG_METRICS[mode] || PIG_METRICS.idle;
+  const target = innerWidth < 420 ? 92 : 104;      // 希望猪身内容的高度
+  const s = target / m.ch;
+  pig.style.width = (m.w * s) + 'px';
+  pig.style.height = (m.h * s) + 'px';
+  pigS.ox = -((m.cx + m.cw / 2) - m.w / 2) * s;    // 让内容中心对准坐标
+  pigS.oy = (m.h - (m.cy + m.ch)) * s - 3;         // 让脚底贴住地面
+  pigS.vw = innerWidth;
+}
 
 function setPigMode(mode) {
   if (pigS.mode === mode) return;
   pigS.mode = mode;
+  applyPigMode(mode);
   pig.src = BASE + (mode === 'walk' ? 'assets/walk.gif' : 'assets/pig.gif');
 }
 
 function pigTick(dt) {
+  if (pigS.vw !== innerWidth) applyPigMode(pigS.mode);
   const W = innerWidth, gy = Scene.groundY();
   const range = Math.min(focusingNow ? 92 : 150, (innerHeight - gy) * 0.5);
   const y0 = gy + 70, now = performance.now();
@@ -439,8 +459,8 @@ function pigTick(dt) {
   $('zzz').classList.toggle('hidden', !sleeping || pigS.walking);
 
   if (!pigS.y) { pigS.y = y0 + range * 0.35; pigS.x = W / 2; }
-  $('zzz').style.left = (pigS.x + 38) + 'px';
-  $('zzz').style.top = (pigS.y - 116) + 'px';
+  $('zzz').style.left = (pigS.x + 26) + 'px';
+  $('zzz').style.top = (pigS.y - 108) + 'px';
 
   if (pigS.walking) {
     const dx = pigS.tx - pigS.x, dy = pigS.ty - pigS.y;
@@ -469,8 +489,8 @@ function pigTick(dt) {
       pigS.walking = true; setPigMode('walk');
     }
   }
-  pig.style.left = pigS.x + 'px';
-  pig.style.top = pigS.y + 'px';
+  pig.style.left = (pigS.x + pigS.ox) + 'px';
+  pig.style.top = (pigS.y + pigS.oy) + 'px';
   pig.style.scale = pigS.dir > 0 ? '1 1' : '-1 1';
 }
 
