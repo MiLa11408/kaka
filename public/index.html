@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=1,user-scalable=no">
+<meta name="theme-color" content="#05070a">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>余烬猪圈</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<canvas id="sky"></canvas>
+
+<!-- 主界面 -->
+<div id="main" class="screen">
+  <header>
+    <div class="brand">余烬<em>猪圈</em></div>
+    <div class="hdr-right">
+      <div class="streak"><b id="h-streak">0</b><span>连续</span></div>
+      <div class="clock" id="h-clock">--:-- · 第 -- 天</div>
+    </div>
+  </header>
+
+  <aside id="friends"></aside>
+
+  <div id="pen">
+    <div id="pigs"></div>
+    <div id="mascot"><img src="assets/pig.gif" alt="我的猪" draggable="false"></div>
+    <div id="empty-hint">还没有猪。<br>点下面的「抽一只」。</div>
+  </div>
+
+  <div id="feed"></div>
+
+  <footer id="dock">
+    <button id="b-draw"><b>抽一只</b><i id="d-sub">今天免费</i></button>
+    <button id="b-focus">专注<i id="f-sub">+1 券</i></button>
+    <button id="b-book">图鉴<i id="k-sub">0/0</i></button>
+    <button id="b-station">站</button>
+  </footer>
+</div>
+
+<!-- 加入 -->
+<div id="join" class="screen hidden">
+  <div class="join-box">
+    <h1>余烬猪圈</h1>
+    <p>每天抽一只猪，专注换更多机会。<br>和朋友共用一个站。</p>
+    <label>你的名字</label>
+    <input id="j-name" maxlength="12" placeholder="米拉" autocomplete="off">
+    <label>站码 <small>（没有就留空，会新建一个）</small></label>
+    <input id="j-code" maxlength="6" placeholder="A7K2M9" autocomplete="off" style="text-transform:uppercase">
+    <button id="j-go">进去</button>
+    <div id="j-err"></div>
+  </div>
+</div>
+
+<!-- 抽卡 -->
+<div id="draw" class="overlay hidden">
+  <div class="card-wrap">
+    <div class="card" id="card">
+      <div class="face back"><span>?</span></div>
+      <div class="face front">
+        <img id="c-img" alt="">
+        <div class="c-meta">
+          <div class="c-name" id="c-name"></div>
+          <div class="c-tag" id="c-tag"></div>
+        </div>
+      </div>
+    </div>
+    <div class="draw-hint" id="d-hint">点一下翻开</div>
+  </div>
+</div>
+
+<!-- 专注 -->
+<div id="focus" class="overlay hidden">
+  <div class="focus-box">
+    <div class="f-label">专注中</div>
+    <div class="f-time" id="f-time">25:00</div>
+    <div class="f-note" id="f-note">放下手机。世界在替你看着。</div>
+    <div class="f-actions">
+      <button id="f-min" class="ghost">收起</button>
+      <button id="f-stop" class="ghost danger">放弃</button>
+    </div>
+  </div>
+</div>
+
+<!-- 图鉴 -->
+<div id="book" class="overlay hidden">
+  <div class="sheet">
+    <div class="sheet-hd">
+      <h2>图鉴</h2>
+      <div class="book-stat"><b id="k-have">0</b><span id="k-total">/0</span></div>
+      <button class="x" data-close>✕</button>
+    </div>
+    <div id="book-grid"></div>
+    <div class="sheet-ft"><button class="ghost" id="k-more">再多看一些</button></div>
+  </div>
+</div>
+
+<!-- 站 -->
+<div id="station" class="overlay hidden">
+  <div class="sheet small">
+    <div class="sheet-hd">
+      <h2>站</h2>
+      <button class="x" data-close>✕</button>
+    </div>
+    <div class="st-body">
+      <div class="st-code">
+        <span>站码</span>
+        <b id="s-code">------</b>
+        <button class="ghost" id="s-copy">复制</button>
+      </div>
+      <div class="st-members" id="s-members"></div>
+      <p class="st-note">把这个码发给朋友，他们就能进来。<br>一个站最多 6 个人。</p>
+    </div>
+  </div>
+</div>
+
+<!-- 大图 -->
+<div id="viewer" class="overlay hidden">
+  <div class="viewer-box">
+    <img id="v-img" alt="">
+    <div class="v-name" id="v-name"></div>
+    <div class="v-sub" id="v-sub"></div>
+    <button class="ghost" data-close>关上</button>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script src="app.js"></script>
+</body>
+</html>

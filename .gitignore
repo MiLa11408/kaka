@@ -1,0 +1,7 @@
+﻿data/
+.uitest/
+__*.html
+tmp*/
+*.apk
+node_modules/
+.chrome*/
