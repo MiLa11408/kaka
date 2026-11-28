@@ -28,8 +28,12 @@ let SRV_SKEW = 0;
 const nowMs = () => Date.now() + SRV_SKEW;
 
 /* 连续专注（自动番茄钟）：默认关，可在「我」里打开 */
-let autoCycle = localStorage.getItem('pig.autocycle') === '1';
+let autoCycle = localStorage.getItem('pig.autocycle') !== '0';
 let lastMinutes = parseInt(localStorage.getItem('pig.lastmin') || '25', 10) || 25;
+let roundsWanted = clampInt(parseInt(localStorage.getItem('pig.rounds') || '2', 10), 1, 6) || 2;
+let cycle = (() => { try { return JSON.parse(localStorage.getItem('pig.cycle') || 'null'); } catch { return null; } })();
+function clampInt(v, a, b) { return Math.min(b, Math.max(a, Number.isFinite(v) ? v : a)); }
+function saveCycle() { write('pig.cycle', cycle); }
 let focusGen = 0;        // 每开始一次专注 +1，用来丢弃迟到的旧结算
 let focusingNow = false; // 专注时猪会安静一点，陪在旁边
 
@@ -204,10 +208,11 @@ function tickCountdowns() {
 /* ---------------- 专注 / 休息 ---------------- */
 let settling = false;
 
-async function startFocus(minutes) {
+async function startFocus(minutes, fresh = false) {
   const brk = (MODES.find(([f]) => f === minutes) || [minutes, 5])[1];
   lastMinutes = minutes;
   localStorage.setItem('pig.lastmin', String(minutes));
+  if (fresh || !cycle) { cycle = { total: roundsWanted, done: 0, minutes }; saveCycle(); }
   const r = await call('/api/focus/start', { minutes });
   // 服务器已经有进行中的专注（换设备 / 清了缓存）：把它接过来，而不是干瞪眼
   if (r.status === 409) {
@@ -252,7 +257,9 @@ function updateTomato() {
   const el = $('f-tomato');
   if (!el) return;
   const done = (ME && ME.todayFocus && ME.todayFocus.count) || 0;
-  el.textContent = `今日第 ${done + 1} 个 · ${lastMinutes} 分钟专注`;
+  const total = cycle ? cycle.total : 1;
+  const idx = Math.min(total, (cycle ? cycle.done : 0) + 1);
+  el.textContent = `第 ${idx} / ${total} 轮 · 今日第 ${done + 1} 个 · ${lastMinutes} 分钟`;
 }
 
 let lastSettleTry = 0;
@@ -274,6 +281,7 @@ async function settleFocus(force = false) {
     focusOpen = false;
     $('focus').classList.add('hidden');
     if (r.body.settled) {
+      if (cycle) { cycle.done = Math.min(cycle.total, cycle.done + 1); saveCycle(); }
       adopt(r.body.me);
       const seed = r.body.seed;
       toast(`专注完成！券 +${r.body.granted}${seed ? `，得到一颗${seed.name}种子` : ''}`, 4200);
@@ -282,6 +290,7 @@ async function settleFocus(force = false) {
       await startBreak(f.break || 5);
       await refresh();
     } else if (r.body.status === 'aborted') {
+      cycle = null; saveCycle();
       adopt(r.body.me);
     }
   } finally {
@@ -305,9 +314,12 @@ async function endBreak(auto = false) {
   cancelNotify(1002);
   await call('/api/break/end', {});
   timers();
-  if (auto && autoCycle) {
-    toast('休息结束，自动开始下一个番茄');
-    startFocus(lastMinutes);
+  if (auto && autoCycle && cycle && cycle.done < cycle.total) {
+    toast(`休息结束，开始第 ${cycle.done + 1} / ${cycle.total} 轮`);
+    startFocus(cycle.minutes);
+  } else if (auto && cycle && cycle.done >= cycle.total) {
+    cycle = null; saveCycle();
+    toast('这一组番茄完成了，歇会儿吧', 2800);
   } else {
     toast('休息结束，继续吧');
   }
@@ -359,16 +371,31 @@ function openFocusPicker() {
     top = `<p class="note">正在休息，还剩 ${fmt(b.endsAt - nowMs())}。休息结束会提醒你。</p>
       <div class="row2"><button class="btn" id="skip-break">跳过休息，直接选</button></div>`;
   }
-  const bd = openSheet('专注多久', `${top}${MODES.map(([m, r]) => `
+  const bd = openSheet('开始专注', `${top}
+    <div style="display:flex;align-items:center;justify-content:center;gap:14px;margin:4px 0 14px">
+      <span style="font-size:13px;color:var(--dim)">一组做几轮</span>
+      <button class="btn" id="rp-minus" style="min-width:0;width:46px;padding:8px 0">−</button>
+      <b id="rp-n" style="font-size:18px;min-width:24px;text-align:center">${roundsWanted}</b>
+      <button class="btn" id="rp-plus" style="min-width:0;width:46px;padding:8px 0">+</button>
+    </div>
+    ${MODES.map(([m, r]) => `
     <div class="row2"><button class="btn primary mode" data-m="${m}" style="height:72px">
-      专注 ${m} 分钟<br><small style="font-weight:400;opacity:.85">之后休息 ${r} 分钟 · 券 +${m >= 45 ? 2 : 1}</small></button></div>`).join('')}
-    <p class="note">完成的专注会给你券和一颗种子。中途放弃没有奖励，但 5 分钟内重新开始同样时长会接着算。</p>`);
+      专注 ${m} 分钟<br><small style="font-weight:400;opacity:.85">之后休息 ${r} 分钟 · 券 +${m >= 45 ? 4 : 2}</small></button></div>`).join('')}
+    <p class="note">专注结束自动休息，休息结束自动开下一轮，直到完成这一组。中途放弃没有奖励。</p>`);
+  const rn = bd.querySelector('#rp-n');
+  const setRounds = (v) => {
+    roundsWanted = clampInt(v, 1, 6);
+    localStorage.setItem('pig.rounds', String(roundsWanted));
+    rn.textContent = roundsWanted;
+  };
+  bd.querySelector('#rp-minus').addEventListener('click', () => setRounds(roundsWanted - 1));
+  bd.querySelector('#rp-plus').addEventListener('click', () => setRounds(roundsWanted + 1));
   bd.querySelector('[data-m="25"]').addEventListener('click', () => pick(25));
   bd.querySelector('[data-m="45"]').addEventListener('click', () => pick(45));
   const sk = bd.querySelector('#skip-break');
   if (sk) sk.addEventListener('click', async () => { write(KEY_B, null); cancelNotify(1002); await call('/api/break/end', {}); closeSheet(); openFocusPicker(); });
 
-  async function pick(m) { closeSheet(); startFocus(m); }
+  async function pick(m) { write(KEY_B, null); cancelNotify(1002); closeSheet(); startFocus(m, true); }
 }
 
 /* 系统通知：由系统闹钟到点才响，不依赖页面还活着 */
@@ -394,7 +421,7 @@ async function cancelNotify(id) {
 
 /* ---------------- 猪 ---------------- */
 const pig = $('pig');
-const pigS = { x: innerWidth / 2, y: 0, tx: 0, ty: 0, walking: false, until: 0, mode: 'idle', last: 0 };
+const pigS = { x: innerWidth / 2, y: 0, tx: 0, ty: 0, walking: false, until: 0, mode: 'idle', last: 0, dir: 1 };
 
 function setPigMode(mode) {
   if (pigS.mode === mode) return;
@@ -404,46 +431,57 @@ function setPigMode(mode) {
 
 function pigTick(dt) {
   const W = innerWidth, gy = Scene.groundY();
-  const range = Math.min(focusingNow ? 110 : 170, (innerHeight - gy) * 0.52);
-  const y0 = gy + 74, now = performance.now();
-  const half = 84;                                   // 猪身一半宽，别走到屏幕外
+  const range = Math.min(focusingNow ? 92 : 150, (innerHeight - gy) * 0.5);
+  const y0 = gy + 70, now = performance.now();
+  const half = 66;                                   // 猪身一半宽，别走到屏幕外
   const hour = Scene.hour();
   const sleeping = hour >= 23 || hour < 6;
   $('zzz').classList.toggle('hidden', !sleeping || pigS.walking);
 
   if (!pigS.y) { pigS.y = y0 + range * 0.35; pigS.x = W / 2; }
-  $('zzz').style.left = (pigS.x + 46) + 'px';
-  $('zzz').style.top = (pigS.y - 140) + 'px';
+  $('zzz').style.left = (pigS.x + 38) + 'px';
+  $('zzz').style.top = (pigS.y - 116) + 'px';
 
   if (pigS.walking) {
     const dx = pigS.tx - pigS.x, dy = pigS.ty - pigS.y;
     const dist = Math.hypot(dx, dy);
-    const sp = 52 * (sleeping ? 0.45 : 1) * (focusingNow ? 0.65 : 1);
+    const sp = 44 * (sleeping ? 0.45 : 1) * (focusingNow ? 0.6 : 1);
     if (dist < 3) {
       pigS.walking = false; setPigMode('idle');
-      pigS.until = now + (focusingNow ? 7000 : 2500) + Math.random() * (sleeping ? 12000 : 6500);
+      pigS.until = now + (focusingNow ? 6000 : 1800) + Math.random() * (sleeping ? 10000 : 4200);
     } else {
-      pigS.x += (dx / dist) * sp * dt;
+      pigS.x = clamp(pigS.x + (dx / dist) * sp * dt, half, W - half);
       pigS.y += (dy / dist) * sp * dt;
+      if (Math.abs(dx) > 1) pigS.dir = dx < 0 ? 1 : -1;    // 素材本身朝左
     }
   } else if (now > pigS.until) {
-    pigS.tx = half + Math.random() * Math.max(20, W - half * 2);
-    pigS.ty = y0 + Math.random() * range;
-    pigS.walking = true; setPigMode('walk');
+    // 随机动作：走一走 / 原地蹦一下 / 转个身看看
+    const r = Math.random();
+    if (r < 0.14) {
+      hopPig();
+      pigS.until = now + 800 + Math.random() * 900;
+    } else if (r < 0.30) {
+      pigS.dir = Math.random() < 0.5 ? 1 : -1;
+      pigS.until = now + 1400 + Math.random() * 2000;
+    } else {
+      pigS.tx = half + Math.random() * Math.max(20, W - half * 2);
+      pigS.ty = y0 + Math.random() * range;
+      pigS.walking = true; setPigMode('walk');
+    }
   }
-  const moving = pigS.walking ? (pigS.tx - pigS.x) : 0;
   pig.style.left = pigS.x + 'px';
   pig.style.top = pigS.y + 'px';
-  pig.style.scale = moving < 0 ? '1 1' : '-1 1';        // 素材本身朝左
+  pig.style.scale = pigS.dir > 0 ? '1 1' : '-1 1';
 }
 
 let bubbleTimer = null;
 function say(text) {
   const b = $('bubble');
+  const r = pig.getBoundingClientRect();
   b.textContent = text;
   b.classList.remove('hidden');
-  b.style.left = pigS.x + 'px';
-  b.style.top = (pigS.y - 150) + 'px';
+  b.style.left = (r.left + r.width / 2) + 'px';
+  b.style.top = (r.top - 8) + 'px';
   clearTimeout(bubbleTimer);
   bubbleTimer = setTimeout(() => b.classList.add('hidden'), 2200);
 }
@@ -507,35 +545,37 @@ async function doDraw() {
 function openBook() {
   if (!pit) {
     pit = new BallPit($('pit'), imgOf);
-    pit.onTap = (b) => openViewer(b.id);
+    pit.onTap = (b) => openViewer(b.cardId || b.id, b.level);
   }
   const items = Object.entries(ME.cards || {}).map(([id, c]) => ({ id: Number(id), count: c.count, rarity: c.rarity, title: c.title, ex: c.ex }));
   $('pit-n').textContent = items.length;
   $('pit-ov').classList.remove('hidden');
   pit.resize();
   pit.setItems(items);
-  // 已有的球重新从上面倒下来
-  for (const b of pit.balls) { b.y = -b.r - Math.random() * 800; b.x = 20 + Math.random() * (pit.W - 40); }
+  pit.reset();                 // 每次打开都从一级开始落
   pit.open();
 }
 
-function openViewer(id) {
+function openViewer(id, level) {
   const c = (ME.cards || {})[id];
   if (!c) return;
   $('v-img').src = imgOf(id);
   $('v-name').textContent = c.title || ('#' + id);
-  $('v-sub').textContent = `抽到 ${c.count} 次 · EX ${c.ex} · ${RARITY[c.rarity]}`;
+  $('v-sub').textContent = `Lv${level || 1} · 抽到 ${c.count} 次 · EX ${c.ex} · ${RARITY[c.rarity]}`;
   $('viewer').classList.remove('hidden');
 }
 
 /* ---------------- 种子 / 植物 ---------------- */
+const PLANT_EMOJI = { sunflower: '🌻', tulip: '🌷', carrot: '🥕', daisy: '🌼', strawberry: '🍓', pumpkin: '🎃', mushroom: '🍄' };
+const emojiOf = (sp) => PLANT_EMOJI[sp] || '🌱';
+
 function openSeeds() {
   const seeds = ME.seeds || [];
   if (!seeds.length) { toast('没有种子。完成一次专注就会得到一颗。'); return; }
   const bd = openSheet('种点什么', `<p class="note">选一颗，然后点一下地选位置。种下后 2 小时长满，离开也会长。</p>
-    <div class="list">${seeds.map((s) => `<div class="item"><span style="font-size:22px">${s.species === 'sunflower' ? '🌻' : s.species === 'tulip' ? '🌷' : s.species === 'carrot' ? '🥕' : '🌼'}</span><b>${s.name}</b><button class="mini pink" data-seed="${s.id}">种下</button></div>`).join('')}</div>
+    <div class="list">${seeds.map((s) => `<div class="item"><span style="font-size:22px">${emojiOf(s.species)}</span><b>${s.name}</b><button class="mini pink" data-seed="${s.id}">种下</button></div>`).join('')}</div>
     <div class="sec">地里（${(ME.plants || []).length} / 16）</div>
-    ${(ME.plants || []).length ? `<div class="list">${ME.plants.map((p) => `<div class="item"><span style="font-size:20px">${p.species === 'sunflower' ? '🌻' : p.species === 'tulip' ? '🌷' : p.species === 'carrot' ? '🥕' : '🌼'}</span><b>${p.name}</b><small>${Math.round(p.growth * 100)}%</small><button class="del" data-pull="${p.id}" title="拔掉">✕</button></div>`).join('')}</div>` : '<p class="note">还空着。</p>'}`);
+    ${(ME.plants || []).length ? `<div class="list">${ME.plants.map((p) => `<div class="item"><span style="font-size:20px">${emojiOf(p.species)}</span><b>${p.name}</b><small>${Math.round(p.growth * 100)}%</small><button class="del" data-pull="${p.id}" title="拔掉">✕</button></div>`).join('')}</div>` : '<p class="note">还空着。</p>'}`);
   bd.querySelectorAll('[data-seed]').forEach((b) => b.addEventListener('click', () => {
     planting = b.dataset.seed;
     closeSheet();
@@ -736,8 +776,8 @@ async function openAdmin() {
     <div class="sec">功能开关（对所有人生效）</div>
     ${Object.keys(FLAG_NAMES).map((k) => `<div class="toggle" data-flag="${k}"><span>${FLAG_NAMES[k]}</span><span class="sw ${d.flags[k] ? 'on' : ''}"></span></div>`).join('')}
     <div class="sec">所有人</div>
-    <div class="list">${d.accounts.map((a) => `<div class="item"><img src="${a.avatar ? imgOf(a.avatar) : BASE + 'assets/pig.gif'}" onerror="this.src='${BASE}assets/pig.gif'" alt=""><b>${esc(a.name)}${a.admin ? ' · 开发者' : ''}</b><small>${a.cards} 只 · 专注 ${a.focusMin} 分</small><button class="mini green" data-g="${a.uid}">+券</button><button class="mini" data-s="${a.uid}">+种子</button><button class="mini" data-r="${a.uid}">可再抽</button>${a.admin ? '' : `<button class="mini" data-a="${a.uid}">设开发</button>`}</div>`).join('')}</div>
-    <p class="note">「+券」「+种子」每次加 1（券最多 5，种子最多 9）。「可再抽」把这个人今天的免费抽还原。</p>`;
+    <div class="list">${d.accounts.map((a) => `<div class="item"><img src="${a.avatar ? imgOf(a.avatar) : BASE + 'assets/pig.gif'}" onerror="this.src='${BASE}assets/pig.gif'" alt=""><b>${esc(a.name)}${a.admin ? ' · 开发者' : ''}</b><small>${a.cards} 只 · 专注 ${a.focusMin} 分</small><button class="mini green" data-g="${a.uid}">+券</button><button class="mini" data-s="${a.uid}">+种子</button><button class="mini" data-r="${a.uid}">可再抽</button></div>`).join('')}</div>
+    <p class="note">「+券」「+种子」每次加 1（券最多 8，种子最多 9）。「可再抽」把这个人今天的免费抽还原。开发者身份只认服务器配置的昵称，不在界面里授予。</p>`;
   bd.querySelectorAll('[data-flag]').forEach((el) => el.addEventListener('click', async () => {
     const k = el.dataset.flag;
     const f = await call('/api/admin/flags', { key: k, value: !d.flags[k] });
@@ -752,10 +792,6 @@ async function openAdmin() {
   bd.querySelectorAll('[data-s]').forEach((b) => b.addEventListener('click', () => grant(b.dataset.s, { seeds: 1 }, (x) => `种子 → ${x.seeds}`)));
   bd.querySelectorAll('[data-r]').forEach((b) => b.addEventListener('click', async () => {
     await call('/api/admin/resetdraw', { target: b.dataset.r }); toast('已还原今天的免费抽');
-  }));
-  bd.querySelectorAll('[data-a]').forEach((b) => b.addEventListener('click', async () => {
-    const x = await call('/api/admin/addadmin', { target: b.dataset.a });
-    toast(x.status === 200 ? '已经是开发者了' : x.body.message); openAdmin();
   }));
 }
 
@@ -819,6 +855,7 @@ async function settleIfPending(f) {
     lastSettleTry = 0;
     await settleFocus(true);
   } else {
+    cycle = null; saveCycle();
     const r = await call('/api/focus/end', { abandon: true });
     if (r.status === 200) adopt(r.body.me);
     refresh();

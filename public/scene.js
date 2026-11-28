@@ -246,6 +246,16 @@ const Scene = (() => {
     const leaf = rgb([79, 157, 74], Math.max(0.55, P.light));
     const leaf2 = rgb([104, 182, 92], Math.max(0.55, P.light));
 
+    const ring = (top) => {
+      if (alpha !== 1 || g >= 0.999) return;
+      const cy = top;
+      ctx.strokeStyle = 'rgba(0,0,0,.16)';
+      ctx.lineWidth = 2.2 * s;
+      ctx.beginPath(); ctx.arc(0, cy, 7 * s, 0, 6.2832); ctx.stroke();
+      ctx.strokeStyle = '#ffcf4d';
+      ctx.beginPath(); ctx.arc(0, cy, 7 * s, -Math.PI / 2, -Math.PI / 2 + 6.2832 * g); ctx.stroke();
+    };
+
     ctx.save();
     ctx.globalAlpha = alpha;
     ctx.translate(x, y);
@@ -258,6 +268,7 @@ const Scene = (() => {
     if (g < 0.06) {                                                 // 刚种下：一颗芽
       ctx.fillStyle = leaf2;
       ctx.beginPath(); ctx.ellipse(0, -4 * s, 3 * s, 4 * s, 0.3, 0, 6.2832); ctx.fill();
+      ring(-h - 9 * s);
       ctx.restore(); return;
     }
 
@@ -271,6 +282,8 @@ const Scene = (() => {
     }
 
     const f = Math.max(0, (g - 0.55) / 0.45);                      // 花从头到尾冒出来
+    const top = -h;
+
     if (p.species === 'carrot') {
       ctx.strokeStyle = leaf2; ctx.lineWidth = 2 * s;              // 缨子
       for (const a of [-0.6, -0.3, 0, 0.3, 0.6]) {
@@ -280,10 +293,34 @@ const Scene = (() => {
         ctx.fillStyle = rgb([242, 130, 60], Math.max(0.55, P.light));
         ctx.beginPath(); ctx.ellipse(0, 1, 4.5 * s, 4 * s, 0, 0, Math.PI); ctx.fill();
       }
+    } else if (p.species === 'pumpkin') {
+      if (f > 0) {                                                 // 一个橙色南瓜
+        const pr = 8 * f * s;
+        ctx.fillStyle = rgb([242, 140, 50], Math.max(0.55, P.light));
+        ctx.beginPath(); ctx.ellipse(0, top + pr * 0.4, pr, pr * 0.85, 0, 0, 6.2832); ctx.fill();
+        ctx.strokeStyle = rgb([200, 105, 35], Math.max(0.5, P.light));
+        ctx.lineWidth = 1.4 * s;
+        for (const k of [-0.45, 0, 0.45]) {
+          ctx.beginPath(); ctx.moveTo(0 + k * pr, top - pr * 0.35); ctx.quadraticCurveTo(k * pr * 1.6, top + pr * 0.4, k * pr, top + pr * 1.1); ctx.stroke();
+        }
+      }
+    } else if (p.species === 'mushroom') {
+      if (f > 0) {                                                 // 红伞白点
+        const mr = 9 * f * s;
+        ctx.fillStyle = '#e85b5b';
+        ctx.beginPath(); ctx.arc(0, top + mr * 0.35, mr, Math.PI, 0); ctx.fill();
+        ctx.fillStyle = '#f7e6c8';
+        ctx.beginPath(); ctx.ellipse(0, top + mr * 0.35, mr * 0.3, mr * 0.55, 0, 0, Math.PI); ctx.fill();
+        ctx.fillStyle = '#fff';
+        for (const [dx, dy, r] of [[-0.45, -0.1, 0.16], [0.35, -0.22, 0.13], [0.1, 0.12, 0.11]]) {
+          ctx.beginPath(); ctx.arc(dx * mr, top + mr * 0.35 + dy * mr, r * mr, 0, 6.2832); ctx.fill();
+        }
+      }
     } else if (f > 0) {
       const fr = (p.species === 'sunflower' ? 11 : 7.5) * f * s;
-      const top = -h;
-      const petal = p.species === 'sunflower' ? [255, 205, 66] : p.species === 'tulip' ? [246, 110, 150] : [255, 255, 255];
+      const petal = p.species === 'sunflower' ? [255, 205, 66]
+        : p.species === 'tulip' ? [246, 110, 150]
+          : p.species === 'strawberry' ? [255, 176, 198] : [255, 255, 255];
       if (p.species === 'tulip') {                                 // 郁金香是个杯子
         ctx.fillStyle = rgb(petal, Math.max(0.55, P.light));
         ctx.beginPath();
@@ -297,13 +334,22 @@ const Scene = (() => {
         ctx.fillStyle = rgb(petal, Math.max(0.55, P.light));
         const n = p.species === 'sunflower' ? 12 : 8;
         for (let i = 0; i < n; i++) {
-          const a = (i / n) * 6.2832 + (p.species === 'sunflower' ? t * 0 : 0);
+          const a = (i / n) * 6.2832;
           ctx.beginPath(); ctx.ellipse(top + Math.cos(a) * fr * 0.62, top - fr * 0.5 + Math.sin(a) * fr * 0.62, fr * 0.42, fr * 0.26, a, 0, 6.2832); ctx.fill();
         }
         ctx.fillStyle = rgb(p.species === 'sunflower' ? [122, 78, 40] : [255, 205, 66], Math.max(0.55, P.light));
-        ctx.beginPath(); ctx.arc(top, -h - fr * 0.5, fr * 0.42, 0, 6.2832); ctx.fill();
+        ctx.beginPath(); ctx.arc(0, top - fr * 0.5, fr * 0.42, 0, 6.2832); ctx.fill();
       }
     }
+
+    if (p.species === 'strawberry' && g > 0.72) {                  // 结几颗小草莓
+      ctx.fillStyle = '#e8475f';
+      for (const [bx, by] of [[-6, -h * 0.34], [6, -h * 0.5], [0, -h * 0.22]]) {
+        ctx.beginPath(); ctx.arc(bx * s, by, 2.6 * s, 0, 6.2832); ctx.fill();
+      }
+    }
+
+    ring(top - 14 * s);
     ctx.restore();
   }
 

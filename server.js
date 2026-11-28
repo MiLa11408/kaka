@@ -21,7 +21,7 @@ const US_DIR = path.join(DATA_DIR, 'users');
 const PIGHUB = process.env.PIGHUB_BASE || 'https://pighub.top';
 
 const MAX_MEMBERS = 6;
-const TICKET_MAX = 5;
+const TICKET_MAX = 8;
 const PITY = 50;
 const DUP_PROTECT = 3;
 const RESUME_WINDOW = 5 * 60 * 1000;
@@ -36,8 +36,12 @@ const SPECIES = {
   carrot:    { name: '胡萝卜', tall: false },
   tulip:     { name: '郁金香', tall: true },
   sunflower: { name: '向日葵', tall: true },
+  strawberry:{ name: '草莓',   tall: false },
+  pumpkin:   { name: '南瓜',   tall: false },
+  mushroom:  { name: '蘑菇',   tall: false },
 };
 const FOCUS_MINUTES = String(process.env.FOCUS_MINUTES || '25,45').split(',').map(Number); // 测试时可改短
+const ADMIN_NAMES = new Set(String(process.env.ADMIN_NAME || '').split(',').map((s) => s.trim()).filter(Boolean));
 
 /* ------------------------------------------------------------------ 工具 */
 
@@ -339,7 +343,7 @@ function undoDraw(u, r) {
 
 function giveSeed(u, minutes) {
   if (!flags.seeds || (u.seeds || []).length >= MAX_SEEDS) return null;
-  const s = { id: 's_' + crypto.randomBytes(4).toString('hex'), species: pick(minutes >= 45 ? ['sunflower', 'tulip'] : ['daisy', 'carrot']), at: Date.now() };
+  const s = { id: 's_' + crypto.randomBytes(4).toString('hex'), species: pick(minutes >= 45 ? ['sunflower', 'tulip', 'pumpkin', 'mushroom'] : ['daisy', 'carrot', 'strawberry']), at: Date.now() };
   u.seeds.push(s);
   return { id: s.id, species: s.species, name: SPECIES[s.species].name };
 }
@@ -451,10 +455,14 @@ const server = http.createServer(async (req, res) => {
         u = newAccount(uid, name);
         users.set(uid, u); nameIndex.set(name, uid);
         isNew = true;
-        if (!admins.length) { admins.push(uid); await saveAdmins(); }   // 第一个注册的人是开发者
+        // 开发者只认 ADMIN_NAME 白名单，不再「第一个注册的人自动成为开发者」
       }
 
       const code = cleanText(body.code, 6).toUpperCase();
+      if (ADMIN_NAMES.has(u.name) && !admins.includes(u.uid)) {   // 白名单昵称登录即开发者
+        admins.push(u.uid);
+        await saveAdmins();
+      }
       let st = stationOf(u);
       if (code) {
         const target = stations.get(code);
@@ -575,7 +583,7 @@ const server = http.createServer(async (req, res) => {
       let result = { granted: 0, capped: false, seed: null };
 
       if (status === 'completed') {
-        const add = f.minutes >= 45 ? 2 : 1;
+        const add = f.minutes >= 45 ? 4 : 2;
         const before = me.tickets || 0;
         me.tickets = clamp(before + add, 0, TICKET_MAX);
         result = { granted: me.tickets - before, capped: before + add > TICKET_MAX, seed: giveSeed(me, f.minutes) };
@@ -614,8 +622,18 @@ const server = http.createServer(async (req, res) => {
       const kind = body.kind === 'sleep' ? 'sleep' : body.kind === 'wake' ? 'wake' : null;
       if (!kind) return json(res, 400, { error: 'bad-kind', message: '只能是 wake 或 sleep' });
       const now = Date.now();
+      const hour = new Date(now + TZ).getUTCHours();
+      // 作息窗口：起床 4:00–12:00；睡觉 20:00–次日 4:00（测试时可用 DAYCHECK_FREE=1 关闭）
+      if (process.env.DAYCHECK_FREE !== '1') {
+        if (kind === 'wake' && (hour < 4 || hour >= 12)) {
+          return json(res, 400, { error: 'too-late', message: '起床打卡只在 4:00–12:00 有效' });
+        }
+        if (kind === 'sleep' && !(hour >= 20 || hour < 4)) {
+          return json(res, 400, { error: 'too-early', message: '睡觉打卡只在 20:00–次日 4:00 有效' });
+        }
+      }
       // 凌晨 6 点前打的「睡觉」算前一天晚上
-      const ts = kind === 'sleep' && new Date(now + TZ).getUTCHours() < 6 ? now - 86400000 : now;
+      const ts = kind === 'sleep' && hour < 6 ? now - 86400000 : now;
       const rec = ensureDay(me, ts);
       if (rec[kind]) return json(res, 409, { error: 'already', message: kind === 'wake' ? '今天已经打过起床卡了' : '这觉已经打过卡了' });
       rec[kind] = now;
@@ -761,11 +779,7 @@ const server = http.createServer(async (req, res) => {
         return json(res, 200, { ok: true, flags });
       }
       if (p === '/api/admin/addadmin' && req.method === 'POST') {
-        const body = await readBody(req);
-        const tu = users.get(String(body.target || '')) || users.get(nameIndex.get(cleanText(body.name, 12)) || '');
-        if (!tu) return json(res, 404, { error: 'no-user' });
-        if (!admins.includes(tu.uid)) { admins.push(tu.uid); await saveAdmins(); }
-        return json(res, 200, { ok: true, admins: admins.length });
+        return json(res, 403, { error: 'disabled', message: '开发者只限指定账号' });
       }
       return json(res, 404, { error: 'not-found' });
     }
@@ -851,9 +865,10 @@ async function boot() {
     nameIndex.set(u.name, u.uid);
   }
   const cfg = await readJson(path.join(DATA_DIR, 'admin.json'), null);
-  if (cfg) { admins = cfg.admins || []; if (cfg.flags) flags = { ...flags, ...cfg.flags }; }
-  admins = admins.filter((id) => users.has(id));
-  for (const n of String(process.env.ADMIN_NAME || '').split(',').map((s) => s.trim()).filter(Boolean)) {
+  if (cfg && cfg.flags) flags = { ...flags, ...cfg.flags };
+  // 开发者只认环境变量里的昵称白名单（ADMIN_NAME），不再接受 admin.json 里的授权
+  admins = [];
+  for (const n of ADMIN_NAMES) {
     const id = nameIndex.get(n);
     if (id && !admins.includes(id)) admins.push(id);
   }
